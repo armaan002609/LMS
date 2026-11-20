@@ -31,6 +31,7 @@ import {
   Users,
   Maximize2,
   Volume2,
+  VolumeX,
   Play,
   Pause,
   FileText,
@@ -45,8 +46,32 @@ import {
   Check,
   Monitor,
   MonitorOff,
-  AlertCircle,
+  Lock,
+  Unlock,
+  UserCheck,
+  UserX,
+  Shield,
 } from 'lucide-react';
+
+interface RemotePeer {
+  peerId: string;
+  userId: string;
+  name: string;
+  role: string;
+  stream?: MediaStream;
+  isMicOn: boolean;
+  isCameraOn: boolean;
+  isScreenSharing: boolean;
+  isMutedLocally?: boolean;
+}
+
+interface WaitingLearner {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  requestedAt: string;
+}
 
 export default function CoursePlayerPage({ params }: { params: { enrollmentId: string } }) {
   const { user } = useAuth();
@@ -80,6 +105,20 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [liveSidebarTab, setLiveSidebarTab] = useState<'chat' | 'participants'>('chat');
+
+  // Admission Control & Waiting Room State
+  const [admissionStatus, setAdmissionStatus] = useState<'none' | 'waiting' | 'admitted' | 'denied'>('none');
+  const [autoAdmitEveryone, setAutoAdmitEveryone] = useState<boolean>(true);
+  const [waitingList, setWaitingList] = useState<WaitingLearner[]>([]);
+  const [admittedIds, setAdmittedIds] = useState<string[]>([]);
+
+  // Remote WebRTC Peers (Two-Way Video & Audio)
+  const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
+
+  const peerConnectionsRef = React.useRef<{ [peerId: string]: RTCPeerConnection }>({});
+  const broadcastChannelRef = React.useRef<BroadcastChannel | null>(null);
+  const admissionChannelRef = React.useRef<BroadcastChannel | null>(null);
+  const localPeerIdRef = React.useRef<string>('');
 
   // Video Player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -122,10 +161,24 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       const urlParams = new URLSearchParams(window.location.search);
       if (urlParams.get('tab') === 'live') {
         setActiveTab('live');
-        setIsInLiveRoom(true);
+        if (user) {
+          if (user.role === 'admin' || user.role === 'instructor') {
+            setAdmissionStatus('admitted');
+            setIsInLiveRoom(true);
+          } else {
+            try {
+              const current = localStorage.getItem(`dss_live_room_state_${params.enrollmentId}`);
+              const parsed = current ? JSON.parse(current) : {};
+              if (parsed.autoAdmitEveryone || (Array.isArray(parsed.admittedIds) && parsed.admittedIds.includes(user.id))) {
+                setAdmissionStatus('admitted');
+                setIsInLiveRoom(true);
+              }
+            } catch {}
+          }
+        }
       }
     }
-  }, [params.enrollmentId]);
+  }, [params.enrollmentId, user]);
 
   const handleCommandSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -239,6 +292,486 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
   }, [isScreenSharing]);
 
+  // Room state key for admission & waiting queue
+  const roomStateKey = `dss_live_room_state_${params.enrollmentId}`;
+
+  const loadRoomState = React.useCallback(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = localStorage.getItem(roomStateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed.autoAdmitEveryone === 'boolean') {
+          setAutoAdmitEveryone(parsed.autoAdmitEveryone);
+        }
+        if (Array.isArray(parsed.waitingList)) {
+          setWaitingList(parsed.waitingList);
+        }
+        if (Array.isArray(parsed.admittedIds)) {
+          setAdmittedIds(parsed.admittedIds);
+        }
+      }
+    } catch (e) {
+      console.error('Error reading live room state:', e);
+    }
+  }, [roomStateKey]);
+
+  useEffect(() => {
+    loadRoomState();
+
+    const handleRoomStateEvent = () => {
+      loadRoomState();
+    };
+
+    const handleStorageEvent = (e: StorageEvent) => {
+      if (e.key === roomStateKey) {
+        loadRoomState();
+      }
+    };
+
+    window.addEventListener('dss-room-state-updated', handleRoomStateEvent);
+    window.addEventListener('storage', handleStorageEvent);
+
+    let admChannel: BroadcastChannel | null = null;
+    try {
+      admChannel = new BroadcastChannel(`dss_adm_${params.enrollmentId}`);
+      admissionChannelRef.current = admChannel;
+
+      admChannel.onmessage = (event) => {
+        const data = event.data;
+        if (!data || typeof data !== 'object') return;
+
+        if (data.type === 'learner-knocking' && data.learner) {
+          setWaitingList((prev) => {
+            if (prev.some((w) => w.id === data.learner.id)) return prev;
+            return [...prev, data.learner];
+          });
+        } else if (data.type === 'learner-admitted') {
+          if (user && user.id === data.learnerId) {
+            setAdmissionStatus('admitted');
+            setIsInLiveRoom(true);
+          }
+          setWaitingList((prev) => prev.filter((w) => w.id !== data.learnerId));
+          setAdmittedIds((prev) => Array.from(new Set([...prev, data.learnerId])));
+        } else if (data.type === 'learner-denied') {
+          if (user && user.id === data.learnerId) {
+            setAdmissionStatus('denied');
+          }
+          setWaitingList((prev) => prev.filter((w) => w.id !== data.learnerId));
+        } else if (data.type === 'all-admitted') {
+          if (user && user.role === 'learner') {
+            setAdmissionStatus('admitted');
+            setIsInLiveRoom(true);
+          }
+          setWaitingList([]);
+          if (Array.isArray(data.learnerIds)) {
+            setAdmittedIds((prev) => Array.from(new Set([...prev, ...data.learnerIds])));
+          }
+        } else if (data.type === 'auto-admit-changed') {
+          setAutoAdmitEveryone(data.autoAdmit);
+          if (data.autoAdmit && user && user.role === 'learner' && admissionStatus === 'waiting') {
+            setAdmissionStatus('admitted');
+            setIsInLiveRoom(true);
+          }
+        }
+      };
+    } catch {}
+
+    return () => {
+      window.removeEventListener('dss-room-state-updated', handleRoomStateEvent);
+      window.removeEventListener('storage', handleStorageEvent);
+      if (admChannel) {
+        admChannel.close();
+        admissionChannelRef.current = null;
+      }
+    };
+  }, [params.enrollmentId, roomStateKey, user, admissionStatus, loadRoomState]);
+
+  // Auto-admit learner if policy allows or previously admitted
+  useEffect(() => {
+    if (user && admissionStatus === 'waiting') {
+      if (autoAdmitEveryone || admittedIds.includes(user.id)) {
+        setAdmissionStatus('admitted');
+        setIsInLiveRoom(true);
+      }
+    }
+  }, [autoAdmitEveryone, admittedIds, admissionStatus, user]);
+
+  // Two-Way WebRTC Audio & Video Peer Connection via BroadcastChannel
+  useEffect(() => {
+    if (!isInLiveRoom || admissionStatus !== 'admitted') return;
+
+    const myPeerId = `peer_${user?.id || 'anon'}_${Math.random().toString(36).substring(2, 7)}`;
+    localPeerIdRef.current = myPeerId;
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel(`dss_webrtc_p2p_${params.enrollmentId}`);
+      broadcastChannelRef.current = channel;
+
+      const setupPeerConnection = (targetPeerId: string, targetUserId: string, targetName: string, targetRole: string, isInitiator: boolean) => {
+        if (peerConnectionsRef.current[targetPeerId]) {
+          return peerConnectionsRef.current[targetPeerId];
+        }
+
+        const pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+          ],
+        });
+
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => {
+            pc.addTrack(track, mediaStreamRef.current!);
+          });
+        }
+
+        pc.ontrack = (event) => {
+          const stream = event.streams[0] || new MediaStream([event.track]);
+          setRemotePeers((prev) => {
+            const exists = prev.find((p) => p.peerId === targetPeerId);
+            if (exists) {
+              return prev.map((p) => (p.peerId === targetPeerId ? { ...p, stream } : p));
+            }
+            return [
+              ...prev,
+              {
+                peerId: targetPeerId,
+                userId: targetUserId,
+                name: targetName,
+                role: targetRole,
+                stream,
+                isMicOn: true,
+                isCameraOn: true,
+                isScreenSharing: false,
+                isMutedLocally: false,
+              },
+            ];
+          });
+        };
+
+        pc.onicecandidate = (event) => {
+          if (event.candidate && broadcastChannelRef.current) {
+            broadcastChannelRef.current.postMessage({
+              type: 'webrtc-candidate',
+              from: myPeerId,
+              to: targetPeerId,
+              candidate: event.candidate,
+            });
+          }
+        };
+
+        peerConnectionsRef.current[targetPeerId] = pc;
+
+        if (isInitiator) {
+          pc.createOffer().then((offer) => {
+            return pc.setLocalDescription(offer).then(() => {
+              channel?.postMessage({
+                type: 'webrtc-offer',
+                from: myPeerId,
+                to: targetPeerId,
+                userId: user?.id,
+                name: user?.name || user?.email?.split('@')[0] || 'User',
+                role: user?.role || 'learner',
+                sdp: offer,
+              });
+            });
+          }).catch((err) => console.error('Error creating WebRTC offer:', err));
+        }
+
+        return pc;
+      };
+
+      channel.onmessage = async (event) => {
+        const msg = event.data;
+        if (!msg || typeof msg !== 'object') return;
+        if (msg.from === myPeerId) return;
+
+        if (msg.type === 'peer-presence') {
+          const isInitiator = myPeerId > msg.from;
+          setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, isInitiator);
+
+          if (msg.broadcast) {
+            channel?.postMessage({
+              type: 'peer-presence',
+              from: myPeerId,
+              userId: user?.id,
+              name: user?.name || user?.email?.split('@')[0] || 'User',
+              role: user?.role || 'learner',
+              broadcast: false,
+            });
+          }
+        } else if (msg.type === 'webrtc-offer' && msg.to === myPeerId) {
+          const pc = setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, false);
+          try {
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            channel?.postMessage({
+              type: 'webrtc-answer',
+              from: myPeerId,
+              to: msg.from,
+              sdp: answer,
+            });
+          } catch (e) {
+            console.error('Error handling WebRTC offer:', e);
+          }
+        } else if (msg.type === 'webrtc-answer' && msg.to === myPeerId) {
+          const pc = peerConnectionsRef.current[msg.from];
+          if (pc) {
+            try {
+              await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+            } catch (e) {
+              console.error('Error handling WebRTC answer:', e);
+            }
+          }
+        } else if (msg.type === 'webrtc-candidate' && msg.to === myPeerId) {
+          const pc = peerConnectionsRef.current[msg.from];
+          if (pc && msg.candidate) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            } catch (e) {
+              console.error('Error adding ICE candidate:', e);
+            }
+          }
+        } else if (msg.type === 'peer-leave') {
+          const pc = peerConnectionsRef.current[msg.from];
+          if (pc) {
+            pc.close();
+            delete peerConnectionsRef.current[msg.from];
+          }
+          setRemotePeers((prev) => prev.filter((p) => p.peerId !== msg.from));
+        }
+      };
+
+      channel.postMessage({
+        type: 'peer-presence',
+        from: myPeerId,
+        userId: user?.id,
+        name: user?.name || user?.email?.split('@')[0] || 'User',
+        role: user?.role || 'learner',
+        broadcast: true,
+      });
+    } catch {}
+
+    return () => {
+      if (channel) {
+        channel.postMessage({
+          type: 'peer-leave',
+          from: myPeerId,
+        });
+        Object.values(peerConnectionsRef.current).forEach((pc) => pc.close());
+        peerConnectionsRef.current = {};
+        channel.close();
+        broadcastChannelRef.current = null;
+      }
+      setRemotePeers([]);
+    };
+  }, [isInLiveRoom, admissionStatus, params.enrollmentId, user]);
+
+  // Synchronize local tracks to peer connections
+  const syncLocalTracksToPeers = (stream: MediaStream | null) => {
+    Object.values(peerConnectionsRef.current).forEach((pc) => {
+      if (stream) {
+        stream.getTracks().forEach((track) => {
+          const sender = pc.getSenders().find((s) => s.track?.kind === track.kind);
+          if (sender) {
+            sender.replaceTrack(track);
+          } else {
+            pc.addTrack(track, stream);
+          }
+        });
+      }
+    });
+  };
+
+  // Request to join room handler (Role-Based Admission)
+  const handleRequestJoinRoom = () => {
+    if (!user) {
+      alert('Please log in to enter the live classroom.');
+      return;
+    }
+
+    // 1. ADMIN CAN JOIN ANY LIVE CLASS AT ANY TIME WITHOUT ANY PERMISSION
+    if (user.role === 'admin') {
+      setAdmissionStatus('admitted');
+      setIsInLiveRoom(true);
+      return;
+    }
+
+    // 2. INSTRUCTOR IS THE HOST, CAN JOIN DIRECTLY
+    if (user.role === 'instructor') {
+      setAdmissionStatus('admitted');
+      setIsInLiveRoom(true);
+      return;
+    }
+
+    // 3. LEARNER
+    // Check if auto-admit is active or learner is already admitted
+    if (autoAdmitEveryone || admittedIds.includes(user.id)) {
+      setAdmissionStatus('admitted');
+      setIsInLiveRoom(true);
+      return;
+    }
+
+    // Otherwise, place in Waiting Room and knock
+    setAdmissionStatus('waiting');
+    const learnerName: string = (user.name || (user.email ? user.email.split('@')[0] : '')) || 'Learner';
+    const knockEntry: WaitingLearner = {
+      id: user.id,
+      name: learnerName,
+      email: user.email || '',
+      role: user.role,
+      requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    setWaitingList((prev) => {
+      const filtered = prev.filter((w) => w.id !== user.id);
+      const updated = [...filtered, knockEntry];
+      try {
+        const current = localStorage.getItem(roomStateKey);
+        const parsed = current ? JSON.parse(current) : {};
+        localStorage.setItem(roomStateKey, JSON.stringify({ ...parsed, waitingList: updated }));
+        window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
+      } catch {}
+      return updated;
+    });
+
+    admissionChannelRef.current?.postMessage({
+      type: 'learner-knocking',
+      learner: knockEntry,
+    });
+  };
+
+  const handleAdmitLearner = (learnerId: string) => {
+    setWaitingList((prev) => {
+      const updatedWait = prev.filter((w) => w.id !== learnerId);
+      setAdmittedIds((prevAdmitted) => {
+        const updatedAdmitted = Array.from(new Set([...prevAdmitted, learnerId]));
+        try {
+          const current = localStorage.getItem(roomStateKey);
+          const parsed = current ? JSON.parse(current) : {};
+          localStorage.setItem(
+            roomStateKey,
+            JSON.stringify({
+              ...parsed,
+              waitingList: updatedWait,
+              admittedIds: updatedAdmitted,
+            })
+          );
+          window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
+        } catch {}
+        return updatedAdmitted;
+      });
+
+      admissionChannelRef.current?.postMessage({
+        type: 'learner-admitted',
+        learnerId,
+      });
+
+      return updatedWait;
+    });
+  };
+
+  const handleDenyLearner = (learnerId: string) => {
+    setWaitingList((prev) => {
+      const updatedWait = prev.filter((w) => w.id !== learnerId);
+      try {
+        const current = localStorage.getItem(roomStateKey);
+        const parsed = current ? JSON.parse(current) : {};
+        localStorage.setItem(
+          roomStateKey,
+          JSON.stringify({ ...parsed, waitingList: updatedWait })
+        );
+        window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
+      } catch {}
+
+      admissionChannelRef.current?.postMessage({
+        type: 'learner-denied',
+        learnerId,
+      });
+
+      return updatedWait;
+    });
+  };
+
+  const handleAdmitAll = () => {
+    const allWaitingIds = waitingList.map((w) => w.id);
+    setWaitingList([]);
+    setAdmittedIds((prev) => {
+      const updatedAdmitted = Array.from(new Set([...prev, ...allWaitingIds]));
+      try {
+        const current = localStorage.getItem(roomStateKey);
+        const parsed = current ? JSON.parse(current) : {};
+        localStorage.setItem(
+          roomStateKey,
+          JSON.stringify({
+            ...parsed,
+            waitingList: [],
+            admittedIds: updatedAdmitted,
+          })
+        );
+        window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
+      } catch {}
+      return updatedAdmitted;
+    });
+
+    admissionChannelRef.current?.postMessage({
+      type: 'all-admitted',
+      learnerIds: allWaitingIds,
+    });
+  };
+
+  const handleToggleAutoAdmit = () => {
+    const nextVal = !autoAdmitEveryone;
+    setAutoAdmitEveryone(nextVal);
+
+    if (nextVal) {
+      handleAdmitAll();
+    }
+
+    try {
+      const current = localStorage.getItem(roomStateKey);
+      const parsed = current ? JSON.parse(current) : {};
+      localStorage.setItem(
+        roomStateKey,
+        JSON.stringify({
+          ...parsed,
+          autoAdmitEveryone: nextVal,
+        })
+      );
+      window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
+    } catch {}
+
+    admissionChannelRef.current?.postMessage({
+      type: 'auto-admit-changed',
+      autoAdmit: nextVal,
+    });
+  };
+
+  const handleCancelWaiting = () => {
+    setAdmissionStatus('none');
+    if (user) {
+      setWaitingList((prev) => {
+        const updated = prev.filter((w) => w.id !== user.id);
+        try {
+          const current = localStorage.getItem(roomStateKey);
+          const parsed = current ? JSON.parse(current) : {};
+          localStorage.setItem(roomStateKey, JSON.stringify({ ...parsed, waitingList: updated }));
+          window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
+        } catch {}
+        return updated;
+      });
+    }
+  };
+
+  const toggleRemoteAudioMute = (peerId: string) => {
+    setRemotePeers((prev) =>
+      prev.map((p) => (p.peerId === peerId ? { ...p, isMutedLocally: !p.isMutedLocally } : p))
+    );
+  };
+
   // Cleanup all hardware streams on unmount
   useEffect(() => {
     return () => {
@@ -322,6 +855,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         localVideoRef.current.srcObject = null;
       }
       setIsCameraOn(false);
+      syncLocalTracksToPeers(mediaStreamRef.current);
     } else {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -348,6 +882,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
 
         setIsCameraOn(true);
+        syncLocalTracksToPeers(mediaStreamRef.current);
       } catch (err: any) {
         console.error('Camera access failed:', err);
         setDeviceError(
@@ -380,6 +915,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       }
       setMicLevel(0);
       setIsMicOn(false);
+      syncLocalTracksToPeers(mediaStreamRef.current);
     } else {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -431,6 +967,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
 
         setIsMicOn(true);
+        syncLocalTracksToPeers(mediaStreamRef.current);
       } catch (err: any) {
         console.error('Microphone access failed:', err);
         setDeviceError(
@@ -511,6 +1048,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
+    if (broadcastChannelRef.current) {
+      try {
+        broadcastChannelRef.current.postMessage({
+          type: 'peer-leave',
+          from: localPeerIdRef.current,
+        });
+      } catch {}
+    }
+    Object.values(peerConnectionsRef.current).forEach((pc) => {
+      try {
+        pc.close();
+      } catch {}
+    });
+    peerConnectionsRef.current = {};
+    setRemotePeers([]);
+    setAdmissionStatus('none');
     setIsCameraOn(false);
     setIsMicOn(false);
     setIsScreenSharing(false);
@@ -920,8 +1473,82 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           {activeTab === 'live' && (
             <div className="flex-1 flex flex-col md:flex-row h-full">
               <div className="flex-1 p-6 md:p-8 flex flex-col gap-4">
-                {/* ACTIVE LIVE ROOM STAGE */}
-                {isInLiveRoom ? (
+                {/* 1. WAITING ROOM SCREEN FOR LEARNERS */}
+                {admissionStatus === 'waiting' ? (
+                  <div className="relative aspect-video w-full bg-[#020204] border-2 border-amber-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between p-6">
+                    <div className="flex items-center justify-between z-10">
+                      <span className="px-3 py-1 rounded-full bg-amber-950 text-amber-400 border border-amber-800/80 text-[10px] font-mono font-bold uppercase tracking-wider flex items-center gap-1.5 animate-pulse">
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>WAITING ROOM · PERMISSION REQUESTED</span>
+                      </span>
+                      <span className="text-xs font-mono text-zinc-400">Class: {courseTitle}</span>
+                    </div>
+
+                    <div className="flex-1 flex flex-col items-center justify-center text-center max-w-lg mx-auto gap-4 py-6">
+                      <div className="w-16 h-16 rounded-full bg-amber-950/60 border-2 border-amber-500/80 flex items-center justify-center text-amber-400 animate-pulse shadow-xl shadow-amber-950">
+                        <Lock className="w-7 h-7" />
+                      </div>
+
+                      <div>
+                        <h3 className="text-lg font-bold text-white">Knocking on Live Classroom...</h3>
+                        <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                          Please wait. The instructor has been notified of your knock and will admit you into the live session shortly.
+                        </p>
+                      </div>
+
+                      {/* Device check preview while waiting */}
+                      <div className="w-full bg-[#09090F] border border-zinc-800 rounded-xl p-3.5 flex items-center justify-between text-xs font-mono">
+                        <div className="flex items-center gap-2">
+                          <span className="text-zinc-400">Hardware Pre-Check:</span>
+                          <span className={isMicOn ? 'text-emerald-400 font-bold' : 'text-zinc-500'}>
+                            {isMicOn ? `Mic ON (${micLevel}%)` : 'Mic Muted'}
+                          </span>
+                          <span className="text-zinc-600">·</span>
+                          <span className={isCameraOn ? 'text-emerald-400 font-bold' : 'text-zinc-500'}>
+                            {isCameraOn ? 'Camera Active' : 'Camera Off'}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={toggleMic}
+                            className={`p-1.5 rounded-lg border text-xs ${isMicOn ? 'bg-emerald-600 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400'}`}
+                            title="Test Mic"
+                          >
+                            {isMicOn ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={toggleCamera}
+                            className={`p-1.5 rounded-lg border text-xs ${isCameraOn ? 'bg-emerald-600 text-white' : 'bg-zinc-900 border-zinc-700 text-zinc-400'}`}
+                            title="Test Camera"
+                          >
+                            {isCameraOn ? <Video className="w-3.5 h-3.5" /> : <VideoOff className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {deviceError && (
+                      <div className="p-2 rounded-lg bg-red-950/60 border border-red-900/60 text-xs text-red-400 font-mono">
+                        Hardware warning: {deviceError}
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between border-t border-zinc-900 pt-3 text-xs font-mono">
+                      <span className="text-zinc-500">Live Host: Senior Lead Instructor</span>
+                      <button
+                        type="button"
+                        onClick={handleCancelWaiting}
+                        className="text-xs text-red-400 hover:text-red-300 hover:underline"
+                      >
+                        Cancel Knock &amp; Exit
+                      </button>
+                    </div>
+                  </div>
+                ) : isInLiveRoom && admissionStatus === 'admitted' ? (
+                  /* 2. ACTIVE LIVE CLASSROOM STUDIO */
                   <div className="relative aspect-video w-full bg-[#020204] border-2 border-red-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group">
                     {/* Top Room Banner */}
                     <div className="p-4 flex items-center justify-between z-20 bg-gradient-to-b from-black/90 to-transparent">
@@ -935,26 +1562,89 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2 text-xs font-mono text-zinc-300">
+                      <div className="flex items-center gap-2.5 text-xs font-mono text-zinc-300">
+                        {/* Auto-Admit Policy Toggle for Instructor / Admin */}
+                        {(user?.role === 'instructor' || user?.role === 'admin') && (
+                          <button
+                            type="button"
+                            onClick={handleToggleAutoAdmit}
+                            className={`px-2.5 py-1 rounded-lg font-bold text-[10px] flex items-center gap-1.5 transition-all shadow-sm ${
+                              autoAdmitEveryone
+                                ? 'bg-emerald-950/90 text-emerald-400 border border-emerald-800/80'
+                                : 'bg-amber-950/90 text-amber-400 border border-amber-800/80'
+                            }`}
+                            title={autoAdmitEveryone ? 'Auto-Allow is ON (Anyone enters instantly)' : 'Auto-Allow is OFF (Instructor must admit)'}
+                          >
+                            {autoAdmitEveryone ? <Unlock className="w-3 h-3 text-emerald-400" /> : <Lock className="w-3 h-3 text-amber-400" />}
+                            <span>{autoAdmitEveryone ? '⚡ Auto-Allow ON' : '🔒 Approval Req.'}</span>
+                          </button>
+                        )}
+
                         <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-900/60 text-[10px] font-bold flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                           CONNECTED
                         </span>
+
                         {isMicOn && (
                           <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 border border-red-900/60 text-[10px] font-bold flex items-center gap-1">
                             <Mic className="w-3 h-3 text-red-400 animate-pulse" />
                             <span>MIC ({micLevel}%)</span>
                           </span>
                         )}
+
                         <span className="text-zinc-400 flex items-center gap-1">
                           <Users className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Cohort Live</span>
+                          <span>{remotePeers.length + 1} in Room</span>
                         </span>
                       </div>
                     </div>
 
-                    {/* Center Video & Stage Viewport */}
-                    <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black">
+                    {/* Waiting Room Management HUD Banner (Instructor & Admin Only) */}
+                    {(user?.role === 'instructor' || user?.role === 'admin') && waitingList.length > 0 && (
+                      <div className="mx-4 mt-1 p-2.5 bg-amber-950/90 border border-amber-600/80 rounded-xl flex items-center justify-between gap-2 z-20 shadow-xl animate-in fade-in duration-200">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                          <span className="text-xs font-bold text-white font-mono">
+                            {waitingList.length} Learner{waitingList.length > 1 ? 's' : ''} in Waiting Room:
+                          </span>
+                          <span className="text-xs text-amber-300 font-mono truncate max-w-xs">
+                            {waitingList.map((w) => w.name).join(', ')}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={handleAdmitAll}
+                            className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-mono font-bold text-[11px] flex items-center gap-1"
+                          >
+                            <UserCheck className="w-3 h-3" />
+                            <span>Allow All ({waitingList.length})</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (waitingList[0]) handleAdmitLearner(waitingList[0].id);
+                            }}
+                            className="px-2 py-1 rounded bg-zinc-900 border border-zinc-700 text-emerald-400 hover:text-white font-mono text-[11px]"
+                          >
+                            Allow Next
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (waitingList[0]) handleDenyLearner(waitingList[0].id);
+                            }}
+                            className="px-2 py-1 rounded bg-zinc-900 border border-zinc-700 text-red-400 font-mono text-[11px]"
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Center Video & Multi-Participant Stage Viewport */}
+                    <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black p-3">
                       {/* View 1: Screen Share is Active */}
                       {isScreenSharing ? (
                         <div className="w-full h-full relative flex items-center justify-center bg-black">
@@ -969,7 +1659,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                             <span>Presenting Screen (Live)</span>
                           </div>
 
-                          {/* PiP Camera overlay if camera is also on */}
+                          {/* Floating PiP Local Video Thumbnail */}
                           {isCameraOn && (
                             <div className="absolute bottom-4 right-4 z-20 w-44 h-28 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black">
                               <video
@@ -980,96 +1670,142 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                                 className="w-full h-full object-cover scale-x-[-1]"
                               />
                               <span className="absolute bottom-1 right-2 text-[9px] font-mono font-bold bg-black/80 px-1.5 py-0.5 rounded text-white">
-                                You
+                                You ({user?.role?.toUpperCase()})
                               </span>
                             </div>
                           )}
-                        </div>
-                      ) : isCameraOn ? (
-                        /* View 2: Camera Feed is Active (Fullscreen) */
-                        <div className="w-full h-full relative flex items-center justify-center bg-black">
-                          <video
-                            ref={localVideoRef}
-                            autoPlay
-                            playsInline
-                            muted
-                            className="w-full h-full object-cover scale-x-[-1]"
-                          />
-                          <div className="absolute top-4 left-4 z-10 px-3 py-1 rounded-lg bg-black/80 border border-emerald-500/80 text-emerald-400 text-xs font-mono flex items-center gap-2 backdrop-blur-md">
-                            <Video className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-                            <span>Live Camera Active (HD)</span>
-                          </div>
                         </div>
                       ) : (
-                        /* View 3: Classroom Stage Waiting Hub */
-                        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(220,38,38,0.12),rgba(0,0,0,0.95))] flex flex-col items-center justify-center p-6 text-center">
-                          <div className="w-full max-w-xl bg-[#09090F]/90 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-left flex flex-col gap-3 backdrop-blur-md">
-                            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
-                              <span className="text-[11px] font-mono uppercase text-red-400 font-bold flex items-center gap-2">
-                                <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
-                                <span>DARK SPACE LIVE CLASSROOM STUDIO</span>
-                              </span>
-                              <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> WebRTC Stream Ready
-                              </span>
-                            </div>
-
-                            <div className="font-mono text-xs text-zinc-300 space-y-1.5">
-                              <p className="text-emerald-400 font-bold">// Session: {courseTitle}</p>
-                              <p className="text-zinc-400">&gt; Target Node: <strong className="text-white">{targetIp}</strong></p>
-                              <p className="text-zinc-400">&gt; User: <span className="text-white font-semibold">{user?.name || user?.email || 'Operator'}</span> ({user?.role?.toUpperCase() || 'LEARNER'})</p>
-                            </div>
-
-                            <div className="mt-2 p-3 rounded-xl bg-[#06060A] border border-zinc-800/80 flex flex-col gap-2">
-                              <span className="text-[11px] text-zinc-400 font-mono">Stream Hardware Controls:</span>
-                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                                <button
-                                  type="button"
-                                  onClick={toggleMic}
-                                  className={`p-2 rounded-lg border text-xs font-mono flex items-center justify-center gap-1.5 transition-all ${
-                                    isMicOn ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
-                                  }`}
-                                >
-                                  {isMicOn ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5" />}
-                                  <span>{isMicOn ? `Mic ON (${micLevel}%)` : 'Enable Mic'}</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={toggleCamera}
-                                  className={`p-2 rounded-lg border text-xs font-mono flex items-center justify-center gap-1.5 transition-all ${
-                                    isCameraOn ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
-                                  }`}
-                                >
-                                  {isCameraOn ? <Video className="w-3.5 h-3.5 text-emerald-400" /> : <VideoOff className="w-3.5 h-3.5" />}
-                                  <span>{isCameraOn ? 'Camera ON' : 'Turn on Camera'}</span>
-                                </button>
-
-                                <button
-                                  type="button"
-                                  onClick={toggleScreenShare}
-                                  className="p-2 rounded-lg border bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white text-xs font-mono flex items-center justify-center gap-1.5 transition-all hover:border-red-600"
-                                >
-                                  <Monitor className="w-3.5 h-3.5 text-red-400" />
-                                  <span>Share Screen</span>
-                                </button>
+                        /* View 2: Multi-Participant Two-Way Video Grid (Instructor + Learner + Admin) */
+                        <div className={`w-full h-full grid gap-3 ${
+                          remotePeers.length === 0
+                            ? 'grid-cols-1 md:grid-cols-2'
+                            : remotePeers.length === 1
+                            ? 'grid-cols-1 md:grid-cols-2'
+                            : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+                        }`}>
+                          {/* Tile 1: Local User (You) */}
+                          <div className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border-2 border-red-600/70 shadow-xl flex items-center justify-center">
+                            {isCameraOn ? (
+                              <video
+                                ref={localVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className="w-full h-full object-cover scale-x-[-1]"
+                              />
+                            ) : (
+                              <div className="flex flex-col items-center justify-center gap-2 text-zinc-500">
+                                <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-300 font-bold text-base">
+                                  {(user?.name || user?.email || 'Y').charAt(0).toUpperCase()}
+                                </div>
+                                <span className="text-xs font-mono">Camera is Off</span>
                               </div>
+                            )}
+
+                            {/* Local Name Badge */}
+                            <div className="absolute top-2.5 left-2.5 z-10 px-2.5 py-1 rounded-lg bg-black/80 border border-zinc-800 text-[10px] font-mono text-white flex items-center gap-1.5 backdrop-blur-md">
+                              <span className={`w-2 h-2 rounded-full ${user?.role === 'instructor' ? 'bg-red-500 animate-pulse' : user?.role === 'admin' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                              <span className="font-bold">{user?.name || (user?.email ? user.email.split('@')[0] : 'You')}</span>
+                              <span className="text-[9px] text-zinc-400 uppercase">({user?.role || 'Learner'} · You)</span>
+                            </div>
+
+                            {/* Local Mic Status */}
+                            <div className="absolute bottom-2.5 left-2.5 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono backdrop-blur-md">
+                              {isMicOn ? (
+                                <span className="text-emerald-400 flex items-center gap-1">
+                                  <Mic className="w-3 h-3 text-emerald-400 animate-pulse" />
+                                  <span>MIC ({micLevel}%)</span>
+                                </span>
+                              ) : (
+                                <span className="text-zinc-500 flex items-center gap-1">
+                                  <MicOff className="w-3 h-3" />
+                                  <span>Muted</span>
+                                </span>
+                              )}
                             </div>
                           </div>
 
-                          {/* Device Error Alert */}
-                          {deviceError && (
-                            <div className="mt-3 px-4 py-2 rounded-xl bg-red-950/90 border border-red-800 text-red-200 text-xs font-mono flex items-center gap-2 max-w-md animate-in fade-in">
-                              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                              <span>{deviceError}</span>
-                            </div>
-                          )}
+                          {/* Tile 2+: Remote Peers (Two-Way Live Video & Audio) */}
+                          {remotePeers.map((peer) => (
+                            <div
+                              key={peer.peerId}
+                              className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border border-zinc-800 shadow-xl flex items-center justify-center"
+                            >
+                              <video
+                                ref={(el) => {
+                                  if (el && peer.stream && el.srcObject !== peer.stream) {
+                                    el.srcObject = peer.stream;
+                                    el.play().catch(() => {});
+                                  }
+                                }}
+                                autoPlay
+                                playsInline
+                                muted={Boolean(peer.isMutedLocally)}
+                                className="w-full h-full object-cover"
+                              />
 
-                          {/* Hand Raised Alert */}
-                          {isHandRaised && (
-                            <div className="mt-3 px-3 py-1.5 rounded-full bg-amber-950/80 border border-amber-800/80 text-amber-300 text-xs font-mono flex items-center gap-2 animate-bounce">
-                              <Hand className="w-3.5 h-3.5 text-amber-400" />
-                              <span>Hand is raised! Instructor notified.</span>
+                              {/* Peer Badge */}
+                              <div className="absolute top-2.5 left-2.5 z-10 px-2.5 py-1 rounded-lg bg-black/80 border border-zinc-800 text-[10px] font-mono text-white flex items-center gap-1.5 backdrop-blur-md">
+                                <span className={`w-2 h-2 rounded-full ${peer.role === 'instructor' ? 'bg-red-500 animate-pulse' : peer.role === 'admin' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                                <span className="font-bold">{peer.name}</span>
+                                <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${
+                                  peer.role === 'instructor'
+                                    ? 'bg-red-950 text-red-400 border border-red-900/60'
+                                    : peer.role === 'admin'
+                                    ? 'bg-amber-950 text-amber-400 border border-amber-900/60'
+                                    : 'bg-emerald-950 text-emerald-400 border border-emerald-900/60'
+                                }`}>
+                                  {peer.role === 'instructor' ? 'HOST' : peer.role === 'admin' ? 'ADMIN' : 'LEARNER'}
+                                </span>
+                              </div>
+
+                              {/* Audio Mute Control for Testing */}
+                              <div className="absolute bottom-2.5 right-2.5 z-10">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleRemoteAudioMute(peer.peerId)}
+                                  className={`px-2 py-1 rounded-lg border text-[10px] font-mono flex items-center gap-1 transition-all ${
+                                    peer.isMutedLocally
+                                      ? 'bg-red-950/80 border-red-700 text-red-400'
+                                      : 'bg-black/75 border-zinc-700 text-zinc-300 hover:text-white'
+                                  }`}
+                                  title={peer.isMutedLocally ? 'Unmute remote audio' : 'Mute remote audio locally'}
+                                >
+                                  {peer.isMutedLocally ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
+                                  <span>{peer.isMutedLocally ? 'Audio Muted' : 'Audio ON'}</span>
+                                </button>
+                              </div>
+
+                              <div className="absolute bottom-2.5 left-2.5 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono text-emerald-400 backdrop-blur-md">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                <span>Live WebRTC Audio/Video</span>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Placeholder Card If Waiting for Other Participant */}
+                          {remotePeers.length === 0 && (
+                            <div className="relative aspect-video rounded-xl overflow-hidden bg-[#06060C] border border-dashed border-zinc-800 p-6 flex flex-col items-center justify-center text-center gap-3">
+                              <div className="w-12 h-12 rounded-full bg-red-950/40 border border-red-900/60 flex items-center justify-center text-red-400">
+                                <Radio className="w-6 h-6 animate-pulse" />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-white">
+                                  {user?.role === 'instructor' ? 'Awaiting Learners to Join' : user?.role === 'admin' ? 'Live Class Monitoring' : 'Awaiting Instructor Video Stream'}
+                                </h4>
+                                <p className="text-xs text-zinc-500 mt-1 max-w-xs">
+                                  Two-way audio and video will connect automatically as soon as another participant enters this classroom.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={handleCopyMeetingLink}
+                                className="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 hover:border-zinc-500 text-xs font-mono text-zinc-300 flex items-center gap-1.5"
+                              >
+                                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                <span>{copiedLink ? 'Link Copied' : 'Copy Room Link'}</span>
+                              </button>
                             </div>
                           )}
                         </div>
@@ -1164,7 +1900,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     </div>
                   </div>
                 ) : (
-                  /* LOBBY / PREVIEW STATE */
+                  /* 3. LOBBY / PREVIEW STATE */
                   <div className="relative aspect-video w-full bg-[#020204] border border-red-950/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between">
                     <div className="p-4 flex items-center justify-between z-10 bg-gradient-to-b from-black/80 to-transparent">
                       <span className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
@@ -1183,16 +1919,26 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       </div>
                       <h3 className="text-base font-bold text-white">Live Cohort Session in Progress</h3>
                       <p className="text-xs text-zinc-400 mt-1 max-w-md">
-                        Live studio is active for <strong>{courseTitle}</strong>. Join the interactive voice, video, screen share, and chat room with 1 click.
+                        {user?.role === 'admin'
+                          ? 'Super Admin Mode: You have direct unrestricted access to enter and supervise any active live session without approval.'
+                          : user?.role === 'instructor'
+                          ? 'You are the Instructor and Host of this live masterclass. Launch studio to begin broadcasting.'
+                          : `Live studio is active for ${courseTitle}. Join the interactive voice, video, screen share, and chat room.`}
                       </p>
                       <Button
                         variant="primary"
                         size="md"
-                        onClick={() => setIsInLiveRoom(true)}
+                        onClick={handleRequestJoinRoom}
                         className="mt-4 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 font-bold text-xs gap-2 shadow-lg shadow-red-950/50 hover:scale-105 transition-all"
                       >
                         <Radio className="w-4 h-4" />
-                        <span>🚀 Join Live Class (1-Click)</span>
+                        <span>
+                          {user?.role === 'admin'
+                            ? '🛡️ Join Live Class as Admin (Direct Access) →'
+                            : user?.role === 'instructor'
+                            ? '🚀 Enter Live Studio as Host →'
+                            : '🚀 Join Live Class (1-Click) →'}
+                        </span>
                       </Button>
                     </div>
 
@@ -1268,13 +2014,18 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       <button
                         type="button"
                         onClick={() => setLiveSidebarTab('participants')}
-                        className={`pb-1 border-b-2 font-bold transition-all flex items-center gap-1 ${
+                        className={`pb-1 border-b-2 font-bold transition-all flex items-center gap-1.5 ${
                           liveSidebarTab === 'participants'
                             ? 'border-red-500 text-white'
                             : 'border-transparent text-zinc-500 hover:text-white'
                         }`}
                       >
-                        <span>Operators ({chatMessages.length > 0 ? 2 : 1})</span>
+                        <span>Participants ({1 + remotePeers.length})</span>
+                        {isInstructorOrAdmin && waitingList.length > 0 && (
+                          <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-400 text-[9px] font-bold border border-amber-500/40 animate-pulse">
+                            +{waitingList.length}
+                          </span>
+                        )}
                       </button>
                     </div>
 
@@ -1313,42 +2064,176 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       <div ref={chatBottomRef} />
                     </div>
                   ) : (
-                    /* TAB B: ACTIVE PARTICIPANTS (ZERO DEMO NAMES) */
-                    <div className="py-4 space-y-2 overflow-y-auto max-h-[380px] text-xs font-mono">
-                      {/* Host */}
-                      <div className="p-2.5 rounded-lg bg-red-950/30 border border-red-900/40 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center text-[10px] font-bold text-white">
-                            I
+                    /* TAB B: ACTIVE PARTICIPANTS & ADMISSION CONTROLS */
+                    <div className="py-4 space-y-3 overflow-y-auto max-h-[380px] text-xs font-mono">
+                      {/* Host Admission Management (Instructor / Admin Only) */}
+                      {isInstructorOrAdmin && (
+                        <div className="p-2.5 rounded-xl bg-[#0A0A12] border border-zinc-800 space-y-2.5">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-zinc-300 flex items-center gap-1.5">
+                              <Shield className="w-3.5 h-3.5 text-red-500" />
+                              Admission Control
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleToggleAutoAdmit}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors flex items-center gap-1 ${
+                                autoAdmitEveryone
+                                  ? 'bg-emerald-950/60 border-emerald-800 text-emerald-400 hover:bg-emerald-900/70'
+                                  : 'bg-amber-950/60 border-amber-800 text-amber-400 hover:bg-amber-900/70'
+                              }`}
+                            >
+                              {autoAdmitEveryone ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                              <span>{autoAdmitEveryone ? 'Auto-Allow ON' : 'Approval Required'}</span>
+                            </button>
                           </div>
-                          <div>
-                            <span className="font-bold text-red-400 block">Lead Instructor (Host)</span>
-                            <span className="text-[10px] text-zinc-500">Course Mentor</span>
-                          </div>
-                        </div>
-                        <span className="text-[10px] text-emerald-400 font-bold">● Online</span>
-                      </div>
 
-                      {/* Current User */}
-                      <div className="p-2.5 rounded-lg bg-[#0F0F1A] border border-zinc-800 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-200">
-                            {(user?.name || user?.email || 'Y').charAt(0).toUpperCase()}
-                          </div>
-                          <div>
-                            <span className="font-bold text-white block">{user?.name || user?.email || 'You'}</span>
-                            <span className="text-[10px] text-zinc-500 capitalize">{user?.role || 'Learner'} (You)</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-1.5 text-[10px]">
-                          {isMicOn ? (
-                            <span className="text-emerald-400 flex items-center gap-0.5"><Mic className="w-3 h-3" /> ON</span>
-                          ) : (
-                            <span className="text-zinc-500">Muted</span>
+                          {/* Waiting Queue List if any */}
+                          {waitingList.length > 0 && (
+                            <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                              <div className="flex items-center justify-between text-[10px]">
+                                <span className="text-amber-400 font-bold flex items-center gap-1">
+                                  <Clock className="w-3 h-3" /> Waiting ({waitingList.length})
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleAdmitAll}
+                                  className="text-emerald-400 hover:text-emerald-300 font-bold underline text-[10px]"
+                                >
+                                  Admit All
+                                </button>
+                              </div>
+                              {waitingList.map((learner) => (
+                                <div
+                                  key={learner.id}
+                                  className="p-1.5 rounded-lg bg-zinc-900/80 border border-zinc-800 flex items-center justify-between gap-1"
+                                >
+                                  <div className="truncate min-w-0">
+                                    <span className="text-white font-bold block truncate">{learner.name}</span>
+                                    <span className="text-[9px] text-zinc-500 truncate block">{learner.email}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleAdmitLearner(learner.id)}
+                                      className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] flex items-center gap-0.5"
+                                    >
+                                      <UserCheck className="w-3 h-3" /> Allow
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDenyLearner(learner.id)}
+                                      className="p-1 rounded bg-zinc-800 hover:bg-red-950 hover:text-red-400 text-zinc-400 transition-colors"
+                                      title="Deny"
+                                    >
+                                      <UserX className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           )}
-                          {isCameraOn && <span className="text-emerald-400 ml-1"><Video className="w-3 h-3" /></span>}
-                          {isScreenSharing && <span className="text-red-400 ml-1"><Monitor className="w-3 h-3" /></span>}
                         </div>
+                      )}
+
+                      {/* Connected Participants List */}
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block px-1">
+                          In Room ({1 + remotePeers.length})
+                        </span>
+
+                        {/* Local User */}
+                        <div className="p-2.5 rounded-lg bg-[#0F0F1A] border border-zinc-800 flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-200 shrink-0">
+                              {(user?.name || user?.email || 'Y').charAt(0).toUpperCase()}
+                            </div>
+                            <div className="truncate">
+                              <span className="font-bold text-white block truncate">{user?.name || user?.email || 'You'}</span>
+                              <span className="text-[10px] text-zinc-500 capitalize">
+                                {user?.role === 'instructor' ? 'Lead Instructor (Host)' : user?.role === 'admin' ? 'Super Admin' : 'Learner'} (You)
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[10px] shrink-0">
+                            {isMicOn ? (
+                              <span className="text-emerald-400 flex items-center gap-0.5"><Mic className="w-3 h-3" /></span>
+                            ) : (
+                              <span className="text-zinc-500"><MicOff className="w-3 h-3" /></span>
+                            )}
+                            {isCameraOn ? (
+                              <span className="text-emerald-400"><Video className="w-3 h-3" /></span>
+                            ) : (
+                              <span className="text-zinc-600"><VideoOff className="w-3 h-3" /></span>
+                            )}
+                            {isScreenSharing && <span className="text-red-400"><Monitor className="w-3 h-3" /></span>}
+                          </div>
+                        </div>
+
+                        {/* Remote WebRTC Peers (Two-Way Live Audio & Video Connected) */}
+                        {remotePeers.map((peer) => (
+                          <div
+                            key={peer.peerId}
+                            className={`p-2.5 rounded-lg border flex items-center justify-between ${
+                              peer.role === 'instructor'
+                                ? 'bg-red-950/20 border-red-900/40'
+                                : peer.role === 'admin'
+                                ? 'bg-blue-950/20 border-blue-900/40'
+                                : 'bg-[#0B0B14] border-zinc-800/80'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div
+                                className={`w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white shrink-0 ${
+                                  peer.role === 'instructor'
+                                    ? 'bg-red-600'
+                                    : peer.role === 'admin'
+                                    ? 'bg-blue-600'
+                                    : 'bg-zinc-700'
+                                }`}
+                              >
+                                {peer.name.charAt(0).toUpperCase()}
+                              </div>
+                              <div className="truncate">
+                                <span
+                                  className={`font-bold block truncate ${
+                                    peer.role === 'instructor' ? 'text-red-400' : peer.role === 'admin' ? 'text-blue-400' : 'text-zinc-200'
+                                  }`}
+                                >
+                                  {peer.name}
+                                </span>
+                                <span className="text-[10px] text-zinc-500 capitalize">
+                                  {peer.role === 'instructor' ? 'Host' : peer.role === 'admin' ? 'Admin' : 'Learner'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-[10px] shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => toggleRemoteAudioMute(peer.peerId)}
+                                className={`p-1 rounded hover:bg-zinc-800 transition-colors ${
+                                  peer.isMutedLocally ? 'text-red-400' : 'text-emerald-400'
+                                }`}
+                                title={peer.isMutedLocally ? 'Unmute participant for you' : 'Mute participant for you'}
+                              >
+                                {peer.isMutedLocally ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                              </button>
+                              {peer.isCameraOn ? (
+                                <span className="text-emerald-400"><Video className="w-3 h-3" /></span>
+                              ) : (
+                                <span className="text-zinc-600"><VideoOff className="w-3 h-3" /></span>
+                              )}
+                              {peer.isScreenSharing && <span className="text-red-400"><Monitor className="w-3 h-3" /></span>}
+                            </div>
+                          </div>
+                        ))}
+
+                        {/* If no other peers yet */}
+                        {remotePeers.length === 0 && (
+                          <div className="py-4 text-center text-zinc-500 text-[11px] font-mono">
+                            No other participants connected yet.
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

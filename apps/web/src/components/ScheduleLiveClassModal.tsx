@@ -38,6 +38,7 @@ export function ScheduleLiveClassModal({
   const [meetingUrl, setMeetingUrl] = useState('https://meet.darkspacesecurity.io/session-live');
   const [agenda, setAgenda] = useState('');
   const [notifyLearners, setNotifyLearners] = useState(true);
+  const [autoAdmitEveryone, setAutoAdmitEveryone] = useState(true);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
@@ -81,8 +82,24 @@ export function ScheduleLiveClassModal({
     }
 
     try {
+      const targetCId = matchedCourse ? matchedCourse.id : selectedCourseId;
+      if (typeof window !== 'undefined') {
+        try {
+          const roomStateKey = `dss_live_room_state_${targetCId}`;
+          const current = localStorage.getItem(roomStateKey);
+          const parsed = current ? JSON.parse(current) : {};
+          localStorage.setItem(
+            roomStateKey,
+            JSON.stringify({
+              ...parsed,
+              autoAdmitEveryone,
+            })
+          );
+        } catch {}
+      }
+
       await createLiveSession({
-        courseId: matchedCourse ? matchedCourse.id : selectedCourseId,
+        courseId: targetCId,
         courseTitle: cTitle,
         topic: topic.trim(),
         instructorName: instructorName.trim() || 'Senior Academy Instructor',
@@ -296,16 +313,28 @@ export function ScheduleLiveClassModal({
             />
           </div>
 
-          {/* Notify Checkbox */}
-          <label className="flex items-center gap-2 text-xs text-zinc-300 font-mono cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={notifyLearners}
-              onChange={(e) => setNotifyLearners(e.target.checked)}
-              className="rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-red-600"
-            />
-            <span>Broadcast instant push notification &amp; banner to all enrolled learners</span>
-          </label>
+          {/* Options */}
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-xs text-zinc-300 font-mono cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={notifyLearners}
+                onChange={(e) => setNotifyLearners(e.target.checked)}
+                className="rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-red-600"
+              />
+              <span>Broadcast instant push notification &amp; banner to all enrolled learners</span>
+            </label>
+
+            <label className="flex items-center gap-2 text-xs text-zinc-300 font-mono cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoAdmitEveryone}
+                onChange={(e) => setAutoAdmitEveryone(e.target.checked)}
+                className="rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-red-600"
+              />
+              <span className="text-emerald-400">⚡ Auto-allow everyone (Learners enter immediately without waiting for host approval)</span>
+            </label>
+          </div>
 
           <Button
             type="submit"
