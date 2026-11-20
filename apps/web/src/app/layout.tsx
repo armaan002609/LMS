@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { Providers } from '@/components/Providers';
 
 export const metadata: Metadata = {
   title: 'DarkSpaceSecurity | LMS & Cyber Training Portal',
@@ -24,7 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <body className="antialiased bg-[var(--color-surface)] text-[var(--color-text)] font-sans">
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

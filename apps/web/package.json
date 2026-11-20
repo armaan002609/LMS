@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@lms/ui": "workspace:*",
+    "@supabase/supabase-js": "^2.119.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.428.0",
     "next": "14.2.5",
