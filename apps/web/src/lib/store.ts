@@ -2,71 +2,188 @@ import { User, Course, Enrollment, UserWithCourses } from './types';
 import { getSupabaseBrowserClient } from './supabase';
 
 export const INITIAL_COURSES: Course[] = [
+  // --- WEB & SOFTWARE ---
   {
-    id: 'c1',
-    title: 'Offensive Security Certified Specialist',
-    slug: 'offensive-security-specialist',
-    summary: 'Active Directory exploitation, AV evasion, and command and control ops.',
-    category: 'Offensive Security',
-    level: 'Advanced',
-    totalHours: 80,
+    id: 'c0000000-0000-0000-0000-000000000101',
+    title: 'Full Stack Development',
+    slug: 'full-stack-development',
+    summary: 'MERN + Deployment + Projects',
+    category: 'Web & Software',
+    level: 'Intermediate',
+    totalHours: 60,
+    modulesCount: 14,
+    targetLabIp: '10.10.15.50',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000102',
+    title: 'Java (Core + Adv + JSP)',
+    slug: 'java-enterprise',
+    summary: 'Build enterprise applications',
+    category: 'Web & Software',
+    level: 'Intermediate',
+    totalHours: 55,
+    modulesCount: 12,
+    targetLabIp: '10.10.15.51',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000103',
+    title: 'UI/UX Design',
+    slug: 'ui-ux-design',
+    summary: 'Engaging graphics and interfaces',
+    category: 'Web & Software',
+    level: 'Beginner',
+    totalHours: 40,
+    modulesCount: 10,
+    targetLabIp: '10.10.15.52',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000104',
+    title: 'Mobile App Development',
+    slug: 'mobile-app-development',
+    summary: 'Applications for Android & iOS',
+    category: 'Web & Software',
+    level: 'Intermediate',
+    totalHours: 50,
+    modulesCount: 12,
+    targetLabIp: '10.10.15.53',
+  },
+
+  // --- CYBER SECURITY ---
+  {
+    id: 'c0000000-0000-0000-0000-000000000201',
+    title: 'Cyber Security',
+    slug: 'cyber-security-core',
+    summary: 'Defensive + Offensive + Tools',
+    category: 'Cyber Security',
+    level: 'Intermediate',
+    totalHours: 70,
     modulesCount: 16,
     targetLabIp: '10.10.11.45',
   },
   {
-    id: 'c2',
-    title: 'Web Application & API Penetration Testing',
-    slug: 'web-api-vapt',
-    summary: 'OWASP Top 10, GraphQL injection, OAuth exploitation, and zero-day hunting.',
-    category: 'Web Security',
-    level: 'Intermediate',
-    totalHours: 60,
-    modulesCount: 14,
+    id: 'c0000000-0000-0000-0000-000000000202',
+    title: 'Ethical Hacking',
+    slug: 'ethical-hacking',
+    summary: 'Practical vulnerability testing',
+    category: 'Cyber Security',
+    level: 'Advanced',
+    totalHours: 80,
+    modulesCount: 18,
     targetLabIp: '10.10.14.82',
   },
   {
-    id: 'c3',
-    title: 'Cloud Security & AWS DevSecOps Architecture',
-    slug: 'cloud-security-aws',
-    summary: 'Hardening cloud environments, IAM privilege escalation, and container escape.',
-    category: 'Cloud Security',
+    id: 'c0000000-0000-0000-0000-000000000203',
+    title: 'Web Hacking',
+    slug: 'web-hacking',
+    summary: 'Practical vulnerability testing',
+    category: 'Cyber Security',
     level: 'Advanced',
-    totalHours: 50,
-    modulesCount: 10,
-    targetLabIp: '10.10.18.99',
+    totalHours: 65,
+    modulesCount: 15,
+    targetLabIp: '10.10.20.10',
   },
+
+  // --- DATA & AI ---
   {
-    id: 'c4',
-    title: 'SOC Analyst & Threat Hunting Blueprint',
-    slug: 'soc-analyst-threat-hunting',
-    summary: 'SIEM log analysis, memory forensics, network traffic packet inspection.',
-    category: 'Defensive Security',
-    level: 'Intermediate',
-    totalHours: 45,
-    modulesCount: 12,
-    targetLabIp: '10.10.22.10',
-  },
-  {
-    id: 'c5',
-    title: 'Zero-Day Exploitation & Reverse Engineering',
-    slug: 'zero-day-reverse-engineering',
-    summary: 'x86/x64 assembly, buffer overflows, Ghidra disassembly, and kernel debugging.',
-    category: 'Exploit Dev',
+    id: 'c0000000-0000-0000-0000-000000000301',
+    title: 'Artificial Intelligence',
+    slug: 'artificial-intelligence',
+    summary: 'ML + AI + Neural Networks',
+    category: 'Data & AI',
     level: 'Advanced',
-    totalHours: 90,
-    modulesCount: 18,
-    targetLabIp: '10.10.30.50',
+    totalHours: 75,
+    modulesCount: 16,
+    targetLabIp: '10.10.40.10',
   },
   {
-    id: 'c6',
-    title: 'AI Security & LLM Prompt Injection Defense',
-    slug: 'ai-security-llm-defense',
-    summary: 'Securing generative AI pipelines against prompt injection, jailbreaking, and data poisoning.',
-    category: 'AI Security',
+    id: 'c0000000-0000-0000-0000-000000000302',
+    title: 'Data Analyst',
+    slug: 'data-analyst',
+    summary: 'Excel, SQL, Power BI, Python',
+    category: 'Data & AI',
     level: 'Beginner',
-    totalHours: 35,
-    modulesCount: 8,
+    totalHours: 45,
+    modulesCount: 10,
+    targetLabIp: '10.10.40.11',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000303',
+    title: 'Generative AI',
+    slug: 'generative-ai',
+    summary: 'AI-powered content creation',
+    category: 'Data & AI',
+    level: 'Intermediate',
+    totalHours: 40,
+    modulesCount: 10,
     targetLabIp: '10.10.40.12',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000304',
+    title: 'Data Science',
+    slug: 'data-science',
+    summary: 'Data-driven decision making',
+    category: 'Data & AI',
+    level: 'Advanced',
+    totalHours: 65,
+    modulesCount: 14,
+    targetLabIp: '10.10.40.13',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000305',
+    title: 'Python with AI & DL',
+    slug: 'python-ai-dl',
+    summary: 'AI-powered with deep learning',
+    category: 'Data & AI',
+    level: 'Advanced',
+    totalHours: 60,
+    modulesCount: 12,
+    targetLabIp: '10.10.40.14',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000306',
+    title: 'Python with AI & ML',
+    slug: 'python-ai-ml',
+    summary: 'AI-powered with machine learning',
+    category: 'Data & AI',
+    level: 'Intermediate',
+    totalHours: 55,
+    modulesCount: 12,
+    targetLabIp: '10.10.40.15',
+  },
+
+  // --- INTERNSHIPS (4, 8, 12, 24 Weeks) ---
+  {
+    id: 'c0000000-0000-0000-0000-000000000401',
+    title: 'Cyber Security Internship',
+    slug: 'internship-cyber-security',
+    summary: 'Red team + blue team exposure. Live projects with Govt + ISO recognised certificate (4 to 24 Weeks).',
+    category: 'Internship',
+    level: 'Intermediate',
+    totalHours: 120,
+    modulesCount: 24,
+    targetLabIp: '10.10.99.10',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000402',
+    title: 'Full Stack Development Internship',
+    slug: 'internship-full-stack',
+    summary: 'Frontend + Backend + Hosting. Work on industry tasks & placement assistance (4 to 24 Weeks).',
+    category: 'Internship',
+    level: 'Intermediate',
+    totalHours: 120,
+    modulesCount: 24,
+    targetLabIp: '10.10.99.20',
+  },
+  {
+    id: 'c0000000-0000-0000-0000-000000000403',
+    title: 'AI / ML Internship',
+    slug: 'internship-ai-ml',
+    summary: 'Machine learning + projects. Resume & interview prep with live industry tasks (4 to 24 Weeks).',
+    category: 'Internship',
+    level: 'Intermediate',
+    totalHours: 120,
+    modulesCount: 24,
+    targetLabIp: '10.10.99.30',
   },
 ];
 
@@ -119,7 +236,13 @@ const getLocalCourses = (): Course[] => {
     return INITIAL_COURSES;
   }
   try {
-    return JSON.parse(stored);
+    const parsed: Course[] = JSON.parse(stored);
+    // If local storage has outdated course list (less than 16), update to official catalog
+    if (parsed.length < INITIAL_COURSES.length) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_COURSES, JSON.stringify(INITIAL_COURSES));
+      return INITIAL_COURSES;
+    }
+    return parsed;
   } catch {
     return INITIAL_COURSES;
   }
@@ -228,7 +351,7 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
     }
   }
 
-  // Fallback to Local Persistent Store (Pure live data)
+  // Fallback to Local Persistent Store
   const users = getLocalUsers();
   const enrollments = getLocalEnrollments();
   const courses = getLocalCourses();
