@@ -79,6 +79,114 @@ interface WaitingLearner {
   requestedAt: string;
 }
 
+interface RemoteVideoTileProps {
+  peer: RemotePeer;
+  onMuteToggle: (peerId: string) => void;
+}
+
+function RemoteVideoTile({ peer, onMuteToggle }: RemoteVideoTileProps) {
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+
+  React.useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+
+    if (peer.stream) {
+      if (el.srcObject !== peer.stream) {
+        el.srcObject = peer.stream;
+      }
+      el.play().catch(() => {});
+    }
+
+    const stream = peer.stream;
+    if (!stream) return;
+
+    const handleTrackChange = () => {
+      if (el && stream) {
+        el.srcObject = stream;
+        el.play().catch(() => {});
+      }
+    };
+    stream.addEventListener('addtrack', handleTrackChange);
+    stream.addEventListener('removetrack', handleTrackChange);
+    stream.getVideoTracks().forEach((track) => {
+      track.addEventListener('unmute', handleTrackChange);
+    });
+
+    return () => {
+      stream.removeEventListener('addtrack', handleTrackChange);
+      stream.removeEventListener('removetrack', handleTrackChange);
+      stream.getVideoTracks().forEach((track) => {
+        track.removeEventListener('unmute', handleTrackChange);
+      });
+    };
+  }, [peer.stream, peer.isCameraOn]);
+
+  const showVideo = peer.isCameraOn !== false;
+
+  return (
+    <div className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border border-zinc-800 shadow-xl flex items-center justify-center">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        // @ts-ignore
+        webkit-playsinline="true"
+        muted={true}
+        className={
+          showVideo
+            ? 'w-full h-full object-cover'
+            : 'opacity-0 absolute pointer-events-none w-0 h-0'
+        }
+      />
+
+      {/* Fallback Avatar when Camera is OFF */}
+      {!showVideo && (
+        <div className="flex flex-col items-center justify-center gap-2 text-zinc-500 py-6">
+          <div className="w-14 h-14 rounded-full bg-gradient-to-br from-zinc-800 to-zinc-950 border-2 border-zinc-700/80 flex items-center justify-center text-white font-bold text-lg shadow-xl">
+            {(peer.name || 'P').charAt(0).toUpperCase()}
+          </div>
+          <div className="text-center">
+            <div className="text-xs font-bold text-zinc-200">{peer.name}</div>
+            <span className="text-[10px] font-mono text-zinc-500">Camera is Off</span>
+          </div>
+        </div>
+      )}
+
+      {/* Peer Badge */}
+      <div className="absolute top-2.5 left-2.5 z-10 px-2.5 py-1 rounded-lg bg-black/80 border border-zinc-800 text-[10px] font-mono text-white flex items-center gap-1.5 backdrop-blur-md">
+        <span className={`w-2 h-2 rounded-full ${peer.role === 'instructor' ? 'bg-red-500 animate-pulse' : peer.role === 'admin' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+        <span className="font-bold">{peer.name}</span>
+        <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${
+          peer.role === 'instructor'
+            ? 'bg-red-950 text-red-400 border border-red-900/60'
+            : peer.role === 'admin'
+            ? 'bg-amber-950 text-amber-400 border border-amber-900/60'
+            : 'bg-emerald-950 text-emerald-400 border border-emerald-900/60'
+        }`}>
+          {peer.role === 'instructor' ? 'HOST' : peer.role === 'admin' ? 'ADMIN' : 'LEARNER'}
+        </span>
+      </div>
+
+      {/* Audio Mute Control for Testing */}
+      <div className="absolute bottom-2.5 right-2.5 z-10">
+        <button
+          type="button"
+          onClick={() => onMuteToggle(peer.peerId)}
+          className={`p-1.5 rounded-lg border backdrop-blur-md transition-colors ${
+            peer.isMutedLocally
+              ? 'bg-red-950/80 border-red-800 text-red-400'
+              : 'bg-black/80 border-zinc-700 text-zinc-300 hover:text-white'
+          }`}
+          title={peer.isMutedLocally ? 'Unmute participant for you' : 'Mute participant for you'}
+        >
+          {peer.isMutedLocally ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function CoursePlayerPage({ params }: { params: { enrollmentId: string } }) {
   const { user } = useAuth();
   const [course, setCourse] = useState<Course | null>(null);
@@ -125,6 +233,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   const peerConnectionsRef = React.useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const peerUserIdMapRef = React.useRef<{ [peerId: string]: string }>({});
+  const iceCandidateQueueRef = React.useRef<{ [peerId: string]: RTCIceCandidateInit[] }>({});
   const broadcastChannelRef = React.useRef<BroadcastChannel | null>(null);
   const admissionChannelRef = React.useRef<BroadcastChannel | null>(null);
   const sbChannelRef = React.useRef<any>(null);
@@ -647,27 +756,33 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
           { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          { urls: 'stun:stun.cloudflare.com:3478' },
         ],
       });
 
-      // Upfront sendrecv transceivers for audio and video
-      try {
-        pc.addTransceiver('video', { direction: 'sendrecv' });
-        pc.addTransceiver('audio', { direction: 'sendrecv' });
-      } catch {}
+      // 1. Initial transceivers or tracks for two-way audio & video
+      const currentVideoTrack = mediaStreamRef.current?.getVideoTracks()[0] || null;
+      const currentAudioTrack = mediaStreamRef.current?.getAudioTracks()[0] || null;
 
-      // Attach existing media tracks if active
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => {
-          try {
-            const sender = pc.getSenders().find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind);
-            if (sender) {
-              sender.replaceTrack(track).catch(() => {});
-            } else {
-              pc.addTrack(track, mediaStreamRef.current!);
-            }
-          } catch {}
-        });
+      try {
+        if (currentVideoTrack) {
+          pc.addTrack(currentVideoTrack, mediaStreamRef.current!);
+        } else {
+          pc.addTransceiver('video', { direction: 'sendrecv' });
+        }
+      } catch (err) {
+        console.warn('Error configuring video transceiver:', err);
+      }
+
+      try {
+        if (currentAudioTrack) {
+          pc.addTrack(currentAudioTrack, mediaStreamRef.current!);
+        } else {
+          pc.addTransceiver('audio', { direction: 'sendrecv' });
+        }
+      } catch (err) {
+        console.warn('Error configuring audio transceiver:', err);
       }
 
       if (screenStreamRef.current) {
@@ -679,19 +794,44 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       }
 
       pc.ontrack = (event) => {
-        const stream = event.streams[0] || new MediaStream([event.track]);
+        const incomingStream = event.streams[0] || new MediaStream([event.track]);
+
+        // Unmute listener: fires when remote sender starts transmitting frames
+        event.track.onunmute = () => {
+          setRemotePeers((prev) =>
+            prev.map((p) =>
+              p.peerId === targetPeerId || (targetUserId && p.userId === targetUserId)
+                ? {
+                    ...p,
+                    isCameraOn: event.track.kind === 'video' ? true : p.isCameraOn,
+                    isMicOn: event.track.kind === 'audio' ? true : p.isMicOn,
+                    stream: p.stream ? new MediaStream(p.stream.getTracks()) : incomingStream,
+                  }
+                : p
+            )
+          );
+        };
+
         setRemotePeers((prev) => {
           const exists = prev.find((p) => p.peerId === targetPeerId || (targetUserId && p.userId === targetUserId));
           if (exists) {
             let activeStream = exists.stream;
             if (!activeStream) {
-              activeStream = stream;
+              activeStream = incomingStream;
             } else if (!activeStream.getTracks().some((t) => t.id === event.track.id)) {
               activeStream.addTrack(event.track);
             }
             const updatedStream = new MediaStream(activeStream.getTracks());
             return prev.map((p) =>
-              p.peerId === exists.peerId ? { ...p, peerId: targetPeerId, stream: updatedStream } : p
+              p.peerId === exists.peerId
+                ? {
+                    ...p,
+                    peerId: targetPeerId,
+                    userId: targetUserId || p.userId,
+                    stream: updatedStream,
+                    isCameraOn: event.track.kind === 'video' ? true : p.isCameraOn,
+                  }
+                : p
             );
           }
           return [
@@ -701,9 +841,9 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               userId: targetUserId,
               name: targetName,
               role: targetRole,
-              stream,
+              stream: incomingStream,
               isMicOn: true,
-              isCameraOn: true,
+              isCameraOn: event.track.kind === 'video' ? true : true,
               isScreenSharing: false,
               isMutedLocally: false,
             },
@@ -721,6 +861,24 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
       };
 
+      pc.onnegotiationneeded = async () => {
+        try {
+          if (pc.signalingState !== 'stable') return;
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          broadcastRoomMessage('webrtc-offer', {
+            from: myPeerId,
+            to: targetPeerId,
+            userId: user?.id,
+            name: user?.name || user?.email?.split('@')[0] || 'User',
+            role: user?.role || 'learner',
+            sdp: offer,
+          });
+        } catch (e) {
+          console.warn('Renegotiation error:', e);
+        }
+      };
+
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           setTimeout(() => {
@@ -728,6 +886,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               try { pc.close(); } catch {}
               delete peerConnectionsRef.current[targetPeerId];
               delete peerUserIdMapRef.current[targetPeerId];
+              delete iceCandidateQueueRef.current[targetPeerId];
               setRemotePeers((prev) => prev.filter((p) => p.peerId !== targetPeerId));
             }
           }, 3000);
@@ -774,6 +933,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               } catch {}
               delete peerConnectionsRef.current[pId];
               delete peerUserIdMapRef.current[pId];
+              delete iceCandidateQueueRef.current[pId];
             }
           });
         }
@@ -835,14 +995,26 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           )
         );
       } else if (msg.type === 'webrtc-offer' && msg.to === myPeerId) {
-        const pc = setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, false);
+        let pc = peerConnectionsRef.current[msg.from];
+        if (!pc) {
+          pc = setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, false);
+        }
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+
+          // Flush any buffered candidates
+          const queue = iceCandidateQueueRef.current[msg.from] || [];
+          for (const cand of queue) {
+            try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch {}
+          }
+          delete iceCandidateQueueRef.current[msg.from];
+
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
           broadcastRoomMessage('webrtc-answer', {
             from: myPeerId,
             to: msg.from,
+            userId: user?.id,
             sdp: answer,
           });
         } catch (e) {
@@ -853,17 +1025,30 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         if (pc) {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+
+            // Flush any buffered candidates
+            const queue = iceCandidateQueueRef.current[msg.from] || [];
+            for (const cand of queue) {
+              try { await pc.addIceCandidate(new RTCIceCandidate(cand)); } catch {}
+            }
+            delete iceCandidateQueueRef.current[msg.from];
           } catch (e) {
             console.error('Error handling WebRTC answer:', e);
           }
         }
       } else if (msg.type === 'webrtc-candidate' && msg.to === myPeerId) {
         const pc = peerConnectionsRef.current[msg.from];
-        if (pc && msg.candidate) {
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-          } catch (e) {
-            console.error('Error adding ICE candidate:', e);
+        if (msg.candidate) {
+          if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+            } catch (e) {
+              console.error('Error adding ICE candidate:', e);
+            }
+          } else {
+            const queue = iceCandidateQueueRef.current[msg.from] || [];
+            queue.push(msg.candidate);
+            iceCandidateQueueRef.current[msg.from] = queue;
           }
         }
       } else if (msg.type === 'peer-leave') {
@@ -875,6 +1060,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           } catch {}
           delete peerConnectionsRef.current[targetPeerId];
           delete peerUserIdMapRef.current[targetPeerId];
+          delete iceCandidateQueueRef.current[targetPeerId];
         }
         if (targetUserId) {
           Object.keys(peerConnectionsRef.current).forEach((pId) => {
@@ -884,6 +1070,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               } catch {}
               delete peerConnectionsRef.current[pId];
               delete peerUserIdMapRef.current[pId];
+              delete iceCandidateQueueRef.current[pId];
             }
           });
         }
@@ -935,6 +1122,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       });
       peerConnectionsRef.current = {};
       peerUserIdMapRef.current = {};
+      iceCandidateQueueRef.current = {};
       handlePeerMessageRef.current = null;
       setRemotePeers([]);
     };
@@ -942,17 +1130,35 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   // Synchronize local tracks to peer connections
   const syncLocalTracksToPeers = (stream: MediaStream | null) => {
+    const videoTrack = stream?.getVideoTracks()[0] || null;
+    const audioTrack = stream?.getAudioTracks()[0] || null;
+
     Object.values(peerConnectionsRef.current).forEach((pc) => {
       try {
-        if (stream) {
-          stream.getTracks().forEach((track) => {
-            const sender = pc.getSenders().find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind);
-            if (sender) {
-              sender.replaceTrack(track).catch(() => {});
-            } else {
-              pc.addTrack(track, stream);
-            }
+        // Sync Video Track via Transceiver
+        const videoTransceiver = pc.getTransceivers().find(
+          (t) => (t.receiver && t.receiver.track?.kind === 'video') ||
+                 (t.sender && t.sender.track?.kind === 'video')
+        );
+        if (videoTransceiver && videoTransceiver.sender) {
+          videoTransceiver.sender.replaceTrack(videoTrack).catch((err) => {
+            console.warn('Error replacing video track:', err);
           });
+        } else if (videoTrack) {
+          pc.addTrack(videoTrack, stream!);
+        }
+
+        // Sync Audio Track via Transceiver
+        const audioTransceiver = pc.getTransceivers().find(
+          (t) => (t.receiver && t.receiver.track?.kind === 'audio') ||
+                 (t.sender && t.sender.track?.kind === 'audio')
+        );
+        if (audioTransceiver && audioTransceiver.sender) {
+          audioTransceiver.sender.replaceTrack(audioTrack).catch((err) => {
+            console.warn('Error replacing audio track:', err);
+          });
+        } else if (audioTrack) {
+          pc.addTrack(audioTrack, stream!);
         }
       } catch (e) {
         console.warn('Error syncing tracks to peer:', e);
@@ -1233,6 +1439,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       broadcastRoomMessage('track-state-changed', {
         from: localPeerIdRef.current,
         peerId: localPeerIdRef.current,
+        userId: user?.id,
         isCameraOn: false,
         isMicOn,
         isScreenSharing,
@@ -1251,12 +1458,19 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           mediaStreamRef.current = new MediaStream();
         }
         if (videoTrack) {
+          // Clean up old video tracks if any
+          mediaStreamRef.current.getVideoTracks().forEach((t) => {
+            t.stop();
+            mediaStreamRef.current?.removeTrack(t);
+          });
           mediaStreamRef.current.addTrack(videoTrack);
           videoTrack.onended = () => {
             setIsCameraOn(false);
+            syncLocalTracksToPeers(mediaStreamRef.current);
             broadcastRoomMessage('track-state-changed', {
               from: localPeerIdRef.current,
               peerId: localPeerIdRef.current,
+              userId: user?.id,
               isCameraOn: false,
               isMicOn,
               isScreenSharing,
@@ -1274,6 +1488,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         broadcastRoomMessage('track-state-changed', {
           from: localPeerIdRef.current,
           peerId: localPeerIdRef.current,
+          userId: user?.id,
           isCameraOn: true,
           isMicOn,
           isScreenSharing,
@@ -1314,6 +1529,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       broadcastRoomMessage('track-state-changed', {
         from: localPeerIdRef.current,
         peerId: localPeerIdRef.current,
+        userId: user?.id,
         isCameraOn,
         isMicOn: false,
         isScreenSharing,
@@ -1330,13 +1546,20 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           mediaStreamRef.current = new MediaStream();
         }
         if (audioTrack) {
+          // Clean up old audio tracks if any
+          mediaStreamRef.current.getAudioTracks().forEach((t) => {
+            t.stop();
+            mediaStreamRef.current?.removeTrack(t);
+          });
           mediaStreamRef.current.addTrack(audioTrack);
           audioTrack.onended = () => {
             setIsMicOn(false);
             setMicLevel(0);
+            syncLocalTracksToPeers(mediaStreamRef.current);
             broadcastRoomMessage('track-state-changed', {
               from: localPeerIdRef.current,
               peerId: localPeerIdRef.current,
+              userId: user?.id,
               isCameraOn,
               isMicOn: false,
               isScreenSharing,
@@ -1380,6 +1603,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         broadcastRoomMessage('track-state-changed', {
           from: localPeerIdRef.current,
           peerId: localPeerIdRef.current,
+          userId: user?.id,
           isCameraOn,
           isMicOn: true,
           isScreenSharing,
@@ -1411,6 +1635,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       broadcastRoomMessage('track-state-changed', {
         from: localPeerIdRef.current,
         peerId: localPeerIdRef.current,
+        userId: user?.id,
         isCameraOn,
         isMicOn,
         isScreenSharing: false,
@@ -1444,6 +1669,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             broadcastRoomMessage('track-state-changed', {
               from: localPeerIdRef.current,
               peerId: localPeerIdRef.current,
+              userId: user?.id,
               isCameraOn,
               isMicOn,
               isScreenSharing: false,
@@ -1451,9 +1677,20 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           };
         }
         setIsScreenSharing(true);
+        // Push screen track to all peer connections (triggers pc.onnegotiationneeded)
+        Object.values(peerConnectionsRef.current).forEach((pc) => {
+          try {
+            if (videoTrack) {
+              pc.addTrack(videoTrack, stream);
+            }
+          } catch (e) {
+            console.warn('Error adding screen track to peer:', e);
+          }
+        });
         broadcastRoomMessage('track-state-changed', {
           from: localPeerIdRef.current,
           peerId: localPeerIdRef.current,
+          userId: user?.id,
           isCameraOn,
           isMicOn,
           isScreenSharing: true,
@@ -2259,7 +2496,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           {isCameraOn && (
                             <div className="absolute bottom-4 right-4 z-20 w-36 h-24 sm:w-44 sm:h-28 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black">
                               <video
-                                ref={localVideoRef}
+                                ref={(el) => {
+                                  localVideoRef.current = el;
+                                  if (el && mediaStreamRef.current && el.srcObject !== mediaStreamRef.current) {
+                                    el.srcObject = mediaStreamRef.current;
+                                    el.play().catch(() => {});
+                                  }
+                                }}
                                 autoPlay
                                 playsInline
                                 muted
@@ -2284,7 +2527,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           <div className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border-2 border-red-600/70 shadow-xl flex items-center justify-center">
                             {isCameraOn ? (
                               <video
-                                ref={localVideoRef}
+                                ref={(el) => {
+                                  localVideoRef.current = el;
+                                  if (el && mediaStreamRef.current && el.srcObject !== mediaStreamRef.current) {
+                                    el.srcObject = mediaStreamRef.current;
+                                    el.play().catch(() => {});
+                                  }
+                                }}
                                 autoPlay
                                 playsInline
                                 muted
@@ -2324,89 +2573,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
                           {/* Tile 2+: Remote Peers (Two-Way Live Video & Audio) */}
                           {uniqueRemotePeers.map((peer) => (
-                            <div
+                            <RemoteVideoTile
                               key={peer.peerId}
-                              className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border border-zinc-800 shadow-xl flex items-center justify-center"
-                            >
-                              <video
-                                ref={(el) => {
-                                  if (el && peer.stream && el.srcObject !== peer.stream) {
-                                    el.srcObject = peer.stream;
-                                    el.play().catch(() => {});
-                                  }
-                                }}
-                                autoPlay
-                                playsInline
-                                // @ts-ignore
-                                webkit-playsinline="true"
-                                muted={true}
-                                className={
-                                  peer.isCameraOn !== false
-                                    ? 'w-full h-full object-cover'
-                                    : 'opacity-0 absolute pointer-events-none w-0 h-0'
-                                }
-                              />
-
-                              {/* Fallback Avatar when Camera is OFF */}
-                              {peer.isCameraOn === false && (
-                                <div className="flex flex-col items-center justify-center gap-2 text-zinc-500 py-6">
-                                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-zinc-800 to-zinc-950 border-2 border-zinc-700/80 flex items-center justify-center text-white font-bold text-lg shadow-xl">
-                                    {(peer.name || 'P').charAt(0).toUpperCase()}
-                                  </div>
-                                  <div className="text-center">
-                                    <div className="text-xs font-bold text-zinc-200">{peer.name}</div>
-                                    <span className="text-[10px] font-mono text-zinc-500">Camera is Off</span>
-                                  </div>
-                                </div>
-                              )}
-
-                              {/* Peer Badge */}
-                              <div className="absolute top-2.5 left-2.5 z-10 px-2.5 py-1 rounded-lg bg-black/80 border border-zinc-800 text-[10px] font-mono text-white flex items-center gap-1.5 backdrop-blur-md">
-                                <span className={`w-2 h-2 rounded-full ${peer.role === 'instructor' ? 'bg-red-500 animate-pulse' : peer.role === 'admin' ? 'bg-amber-400' : 'bg-emerald-400'}`} />
-                                <span className="font-bold">{peer.name}</span>
-                                <span className={`text-[9px] uppercase font-bold px-1.5 py-0.5 rounded ${
-                                  peer.role === 'instructor'
-                                    ? 'bg-red-950 text-red-400 border border-red-900/60'
-                                    : peer.role === 'admin'
-                                    ? 'bg-amber-950 text-amber-400 border border-amber-900/60'
-                                    : 'bg-emerald-950 text-emerald-400 border border-emerald-900/60'
-                                }`}>
-                                  {peer.role === 'instructor' ? 'HOST' : peer.role === 'admin' ? 'ADMIN' : 'LEARNER'}
-                                </span>
-                              </div>
-
-                              {/* Audio Mute Control for Testing */}
-                              <div className="absolute bottom-2.5 right-2.5 z-10">
-                                <button
-                                  type="button"
-                                  onClick={() => toggleRemoteAudioMute(peer.peerId)}
-                                  className={`px-2 py-1 rounded-lg border text-[10px] font-mono flex items-center gap-1 transition-all ${
-                                    peer.isMutedLocally
-                                      ? 'bg-red-950/80 border-red-700 text-red-400'
-                                      : 'bg-black/75 border-zinc-700 text-zinc-300 hover:text-white'
-                                  }`}
-                                  title={peer.isMutedLocally ? 'Unmute remote audio' : 'Mute remote audio locally'}
-                                >
-                                  {peer.isMutedLocally ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
-                                  <span>{peer.isMutedLocally ? 'Muted' : 'Sound ON'}</span>
-                                </button>
-                              </div>
-
-                              {/* Peer Mic Status */}
-                              <div className="absolute bottom-2.5 left-2.5 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono backdrop-blur-md">
-                                {peer.isMicOn !== false ? (
-                                  <span className="text-emerald-400 flex items-center gap-1">
-                                    <Mic className="w-3 h-3 text-emerald-400 animate-pulse" />
-                                    <span>Mic Active</span>
-                                  </span>
-                                ) : (
-                                  <span className="text-zinc-500 flex items-center gap-1">
-                                    <MicOff className="w-3 h-3" />
-                                    <span>Mic Muted</span>
-                                  </span>
-                                )}
-                              </div>
-                            </div>
+                              peer={peer}
+                              onMuteToggle={toggleRemoteAudioMute}
+                            />
                           ))}
 
                           {/* Placeholder Card If Waiting for Other Participant */}
