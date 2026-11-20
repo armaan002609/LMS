@@ -137,7 +137,10 @@ function RemoteVideoTile({ peer, onMuteToggle }: RemoteVideoTileProps) {
     };
   }, [peer.stream, peer.isCameraOn]);
 
-  const showVideo = peer.isCameraOn !== false;
+  const hasLiveVideoTrack = Boolean(
+    peer.stream?.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted)
+  );
+  const showVideo = hasLiveVideoTrack || peer.isCameraOn !== false;
 
   return (
     <div className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border border-zinc-800 shadow-xl flex items-center justify-center">
@@ -275,6 +278,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const processedMessagesRef = React.useRef<Set<string>>(new Set());
   const localPeerIdRef = React.useRef<string>('');
   const localTrackStateRef = React.useRef({ isCameraOn: false, isMicOn: false, isScreenSharing: false });
+  const userRef = React.useRef(user);
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
   const handlePeerMessageRef = React.useRef<((msg: any) => Promise<void>) | null>(null);
   const handleAdmissionMessageRef = React.useRef<((msg: any) => void) | null>(null);
 
@@ -912,16 +919,21 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         // Unmute listener: fires when remote sender starts transmitting frames
         event.track.onunmute = () => {
           setRemotePeers((prev) =>
-            prev.map((p) =>
-              p.peerId === targetPeerId || (targetUserId && p.userId === targetUserId)
-                ? {
-                    ...p,
-                    isCameraOn: event.track.kind === 'video' ? true : p.isCameraOn,
-                    isMicOn: event.track.kind === 'audio' ? true : p.isMicOn,
-                    stream: p.stream ? new MediaStream(p.stream.getTracks()) : incomingStream,
-                  }
-                : p
-            )
+            prev.map((p) => {
+              if (p.peerId === targetPeerId || (targetUserId && p.userId === targetUserId)) {
+                const stream = p.stream || incomingStream;
+                if (!stream.getTracks().some((t) => t.id === event.track.id)) {
+                  stream.addTrack(event.track);
+                }
+                return {
+                  ...p,
+                  isCameraOn: event.track.kind === 'video' ? true : p.isCameraOn,
+                  isMicOn: event.track.kind === 'audio' ? true : p.isMicOn,
+                  stream: new MediaStream(stream.getTracks()),
+                };
+              }
+              return p;
+            })
           );
         };
 
@@ -1079,6 +1091,20 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
           const existing = prev.find((p) => (msg.userId && p.userId === msg.userId) || p.peerId === msg.from);
 
+          // Check if remote peer's stream already has an active, unmuted video track
+          const streamHasLiveVideo = Boolean(
+            existing?.stream?.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted)
+          );
+
+          // If stream has live video, camera is definitely ON! Never override it to false via presence heartbeat
+          const finalIsCameraOn = streamHasLiveVideo
+            ? true
+            : typeof msg.isCameraOn === 'boolean'
+            ? msg.isCameraOn
+            : existing
+            ? existing.isCameraOn
+            : true;
+
           return [
             ...filtered,
             {
@@ -1088,7 +1114,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               role: msg.role || existing?.role || 'learner',
               stream: existing?.stream || null,
               isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : existing ? existing.isMicOn : true,
-              isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : existing ? existing.isCameraOn : true,
+              isCameraOn: finalIsCameraOn,
               isScreenSharing: typeof msg.isScreenSharing === 'boolean' ? msg.isScreenSharing : existing ? existing.isScreenSharing : false,
               isMutedLocally: existing ? existing.isMutedLocally : false,
             },
@@ -1216,15 +1242,24 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     handlePeerMessageRef.current = handlePeerMessage;
 
     const announcePresence = (broadcast: boolean = false) => {
+      const activeVideo = Boolean(
+        mediaStreamRef.current?.getVideoTracks().some((t) => t.readyState === 'live' && t.enabled)
+      );
+      const isCam = activeVideo || localTrackStateRef.current.isCameraOn;
+      const activeAudio = Boolean(
+        mediaStreamRef.current?.getAudioTracks().some((t) => t.readyState === 'live' && t.enabled)
+      );
+      const isMic = activeAudio || localTrackStateRef.current.isMicOn;
+
       broadcastRoomMessage('peer-presence', {
         from: myPeerId,
-        userId: user?.id,
-        name: user?.name || user?.email?.split('@')[0] || 'User',
-        role: user?.role || 'learner',
+        userId: userRef.current?.id,
+        name: userRef.current?.name || userRef.current?.email?.split('@')[0] || 'User',
+        role: userRef.current?.role || 'learner',
         broadcast,
-        isCameraOn,
-        isMicOn,
-        isScreenSharing,
+        isCameraOn: isCam,
+        isMicOn: isMic,
+        isScreenSharing: localTrackStateRef.current.isScreenSharing,
       });
     };
 
@@ -1276,7 +1311,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       handlePeerMessageRef.current = null;
       setRemotePeers([]);
     };
-  }, [isInLiveRoom, admissionStatus, canonicalRoomId, user, isMessageProcessed, broadcastRoomMessage]);
+  }, [isInLiveRoom, admissionStatus, canonicalRoomId, user?.id, isMessageProcessed, broadcastRoomMessage]);
 
   // Synchronize local tracks to peer connections
   const syncLocalTracksToPeers = (stream: MediaStream | null) => {
@@ -1585,13 +1620,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         localVideoRef.current.srcObject = null;
       }
       setIsCameraOn(false);
+      localTrackStateRef.current.isCameraOn = false;
       syncLocalTracksToPeers(mediaStreamRef.current);
       broadcastRoomMessage('track-state-changed', {
         from: localPeerIdRef.current,
         peerId: localPeerIdRef.current,
-        userId: user?.id,
+        userId: userRef.current?.id,
         isCameraOn: false,
-        isMicOn,
+        isMicOn: localTrackStateRef.current.isMicOn,
         isScreenSharing,
       });
     } else {
@@ -1624,13 +1660,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           mediaStreamRef.current.addTrack(videoTrack);
           videoTrack.onended = () => {
             setIsCameraOn(false);
+            localTrackStateRef.current.isCameraOn = false;
             syncLocalTracksToPeers(mediaStreamRef.current);
             broadcastRoomMessage('track-state-changed', {
               from: localPeerIdRef.current,
               peerId: localPeerIdRef.current,
-              userId: user?.id,
+              userId: userRef.current?.id,
               isCameraOn: false,
-              isMicOn,
+              isMicOn: localTrackStateRef.current.isMicOn,
               isScreenSharing,
             });
           };
@@ -1642,13 +1679,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
 
         setIsCameraOn(true);
+        localTrackStateRef.current.isCameraOn = true;
         syncLocalTracksToPeers(mediaStreamRef.current);
         broadcastRoomMessage('track-state-changed', {
           from: localPeerIdRef.current,
           peerId: localPeerIdRef.current,
-          userId: user?.id,
+          userId: userRef.current?.id,
           isCameraOn: true,
-          isMicOn,
+          isMicOn: localTrackStateRef.current.isMicOn,
           isScreenSharing,
         });
       } catch (err: any) {
@@ -1659,6 +1697,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             : err?.message || 'Could not access camera device.'
         );
         setIsCameraOn(false);
+        localTrackStateRef.current.isCameraOn = false;
       }
     }
   };
@@ -1683,12 +1722,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       }
       setMicLevel(0);
       setIsMicOn(false);
+      localTrackStateRef.current.isMicOn = false;
       syncLocalTracksToPeers(mediaStreamRef.current);
       broadcastRoomMessage('track-state-changed', {
         from: localPeerIdRef.current,
         peerId: localPeerIdRef.current,
-        userId: user?.id,
-        isCameraOn,
+        userId: userRef.current?.id,
+        isCameraOn: localTrackStateRef.current.isCameraOn,
         isMicOn: false,
         isScreenSharing,
       });
@@ -1712,13 +1752,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           mediaStreamRef.current.addTrack(audioTrack);
           audioTrack.onended = () => {
             setIsMicOn(false);
+            localTrackStateRef.current.isMicOn = false;
             setMicLevel(0);
             syncLocalTracksToPeers(mediaStreamRef.current);
             broadcastRoomMessage('track-state-changed', {
               from: localPeerIdRef.current,
               peerId: localPeerIdRef.current,
-              userId: user?.id,
-              isCameraOn,
+              userId: userRef.current?.id,
+              isCameraOn: localTrackStateRef.current.isCameraOn,
               isMicOn: false,
               isScreenSharing,
             });
@@ -1757,12 +1798,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
 
         setIsMicOn(true);
+        localTrackStateRef.current.isMicOn = true;
         syncLocalTracksToPeers(mediaStreamRef.current);
         broadcastRoomMessage('track-state-changed', {
           from: localPeerIdRef.current,
           peerId: localPeerIdRef.current,
-          userId: user?.id,
-          isCameraOn,
+          userId: userRef.current?.id,
+          isCameraOn: localTrackStateRef.current.isCameraOn,
           isMicOn: true,
           isScreenSharing,
         });
