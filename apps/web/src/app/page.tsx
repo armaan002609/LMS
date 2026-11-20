@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
-import { fetchLearnerCourses } from '@/lib/store';
+import { fetchLearnerCourses, fetchUsersWithCourses } from '@/lib/store';
 import { Course } from '@/lib/types';
 import { Logo } from '@/components/Logo';
 import { Button } from '@lms/ui';
@@ -28,12 +28,28 @@ export default function HomePage() {
   const { user, isLoading, logout } = useAuth();
   const [assignedCourses, setAssignedCourses] = useState<Course[]>([]);
   const [loadingCourses, setLoadingCourses] = useState(true);
+  const [mentorName, setMentorName] = useState<string | null>(user?.assignedInstructorName || null);
 
   useEffect(() => {
     if (!isLoading && !user) {
       router.replace('/login');
     }
   }, [user, isLoading, router]);
+
+  useEffect(() => {
+    if (user?.assignedInstructorName) {
+      setMentorName(user.assignedInstructorName);
+    } else if (user?.assignedInstructorId) {
+      fetchUsersWithCourses().then((users) => {
+        const found = users.find((u) => u.id === user.assignedInstructorId);
+        if (found) {
+          setMentorName(found.name);
+        }
+      });
+    } else {
+      setMentorName(null);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -74,6 +90,13 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-4">
+            {mentorName && (
+              <div className="hidden sm:flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono bg-amber-950/40 border border-amber-900/60 text-amber-300">
+                <GraduationCap className="w-3.5 h-3.5 text-amber-500" />
+                <span>Mentor: <strong className="text-white">{mentorName}</strong></span>
+              </div>
+            )}
+
             <NotificationCenter />
 
             {user.role === 'admin' && (
@@ -147,7 +170,7 @@ export default function HomePage() {
         </section>
 
         {/* Dedicated Instructor & Mentor Hub */}
-        {user.assignedInstructorName ? (
+        {mentorName ? (
           <section className="bg-gradient-to-r from-[#12080D] via-[#0E0B14] to-[#0A0A10] border border-amber-950/60 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3.5">
               <div className="w-12 h-12 rounded-2xl bg-amber-950/60 border border-amber-900/60 flex items-center justify-center text-amber-400 shrink-0">
@@ -163,7 +186,7 @@ export default function HomePage() {
                   </span>
                 </div>
                 <h2 className="text-base md:text-lg font-black text-white mt-1">
-                  {user.assignedInstructorName}
+                  {mentorName}
                 </h2>
                 <p className="text-xs text-zinc-400 mt-0.5">
                   Assigned by Administrator to guide your training perimeter, live classes, study notes, and hands-on lab evaluations.
@@ -174,7 +197,7 @@ export default function HomePage() {
             <div className="flex items-center gap-2 shrink-0">
               {assignedCourses.length > 0 && assignedCourses[0] && (
                 <Link href={`/learn/${assignedCourses[0].id}?tab=live`}>
-                  <Button variant="secondary" size="sm" className="bg-[#14121E] border-amber-900/50 text-amber-300 hover:text-white text-xs gap-1.5 font-bold">
+                  <Button variant="secondary" size="sm" className="bg-[#14121E] border-amber-900/50 text-amber-300 hover:text-white text-xs gap-1.5 font-bold shadow-md shadow-amber-950/30">
                     <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
                     <span>Enter Mentor Live Room</span>
                   </Button>
@@ -273,10 +296,10 @@ export default function HomePage() {
                           <span>Lab: {course.targetLabIp}</span>
                         </div>
                       )}
-                      {user.assignedInstructorName && (
+                      {mentorName && (
                         <div className="flex items-center gap-1.5 font-mono text-amber-400">
                           <GraduationCap className="w-3.5 h-3.5 text-amber-500" />
-                          <span>Mentor: {user.assignedInstructorName}</span>
+                          <span>Mentor: {mentorName}</span>
                         </div>
                       )}
                     </div>

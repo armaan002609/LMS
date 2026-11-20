@@ -26,8 +26,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check local storage session
-    const loadSession = () => {
+    // Check local storage session and sync with live database
+    const loadSession = async () => {
+      let currentUser: User | null = null;
       try {
         const stored = localStorage.getItem(AUTH_STORAGE_KEY);
         if (stored) {
@@ -36,8 +37,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (parsed.email === 'learner@darkspacesecurity.io' || parsed.name === 'Alex Mercer') {
             localStorage.removeItem(AUTH_STORAGE_KEY);
             document.cookie = 'dss_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-            setUser(null);
+            currentUser = null;
           } else {
+            currentUser = parsed;
             setUser(parsed);
           }
         }
@@ -45,6 +47,60 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.warn('Error reading stored session', e);
       } finally {
         setIsLoading(false);
+      }
+
+      // Live synchronization: check if mentor or role changed in Supabase or Store
+      if (currentUser) {
+        const supabase = getSupabaseBrowserClient();
+        if (supabase) {
+          try {
+            const { data: dbUser } = await supabase
+              .from('users')
+              .select('*')
+              .eq('id', currentUser.id)
+              .single();
+
+            if (dbUser) {
+              let instName = dbUser.assigned_instructor_name;
+              if (!instName && dbUser.assigned_instructor_id) {
+                const { data: inst } = await supabase
+                  .from('users')
+                  .select('name')
+                  .eq('id', dbUser.assigned_instructor_id)
+                  .single();
+                if (inst) instName = inst.name;
+              }
+
+              const updated: User = {
+                ...currentUser,
+                role: dbUser.role as any,
+                assignedInstructorId: dbUser.assigned_instructor_id || undefined,
+                assignedInstructorName: instName || undefined,
+              };
+              setUser(updated);
+              localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
+              return;
+            }
+          } catch (err) {
+            console.warn('Error refreshing session from Supabase', err);
+          }
+        }
+
+        // Fallback sync from store users
+        try {
+          const all = await fetchUsersWithCourses();
+          const matched = all.find((u) => u.id === currentUser?.id || u.email.toLowerCase() === currentUser?.email.toLowerCase());
+          if (matched) {
+            const updated: User = {
+              ...currentUser,
+              role: matched.role,
+              assignedInstructorId: matched.assignedInstructorId,
+              assignedInstructorName: matched.assignedInstructorName,
+            };
+            setUser(updated);
+            localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
+          }
+        } catch {}
       }
     };
 

@@ -54,6 +54,7 @@ import {
   UserX,
   Shield,
   Trash2,
+  GraduationCap,
 } from 'lucide-react';
 
 interface RemotePeer {
@@ -1138,6 +1139,15 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                 <span>Target Host: <strong className="text-emerald-400">{targetIp}</strong></span>
                 <span>·</span>
                 <span>{currentTemplate.devOrAttackPodLabel}: <strong className="text-zinc-300">{currentTemplate.attackPodOrCluster}</strong></span>
+                {user?.assignedInstructorName && (
+                  <>
+                    <span>·</span>
+                    <span className="text-amber-400 flex items-center gap-1 font-semibold">
+                      <GraduationCap className="w-3 h-3 text-amber-500" />
+                      <span>Mentor: {user.assignedInstructorName}</span>
+                    </span>
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -1213,6 +1223,16 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               {flagSubmitted ? '100% Done' : '40% Done'}
             </span>
           </div>
+
+          {user?.assignedInstructorName && (
+            <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-950/30 border border-amber-900/50 text-xs">
+              <GraduationCap className="w-4 h-4 text-amber-500 shrink-0" />
+              <div className="flex flex-col truncate">
+                <span className="text-[10px] font-mono uppercase text-amber-400 font-bold">Assigned Mentor</span>
+                <span className="text-xs font-bold text-white truncate">{user.assignedInstructorName}</span>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-2 font-mono text-xs">
             {courseModules.map((mod, idx) => {
