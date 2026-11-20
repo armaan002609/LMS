@@ -9,6 +9,7 @@ import { Course } from '@/lib/types';
 import { Logo } from '@/components/Logo';
 import { Button } from '@lms/ui';
 import { NotificationCenter } from '@/components/NotificationCenter';
+import { LiveSessionHUD } from '@/components/LiveSessionHUD';
 import {
   Terminal,
   Shield,
@@ -142,6 +143,9 @@ export default function HomePage() {
             </div>
           </div>
         </section>
+
+        {/* Live Interactive Class HUD */}
+        <LiveSessionHUD />
 
         {/* Assigned Courses Section */}
         <section className="flex flex-col gap-4">

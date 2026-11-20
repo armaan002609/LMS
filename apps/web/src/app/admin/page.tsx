@@ -32,7 +32,9 @@ import {
   LogOut,
   BookPlus,
   Cpu,
+  Radio,
 } from 'lucide-react';
+import { ScheduleLiveClassModal } from '@/components/ScheduleLiveClassModal';
 
 export default function AdminDashboardPage() {
   const router = useRouter();
@@ -54,6 +56,7 @@ export default function AdminDashboardPage() {
 
   // Add Course Modal State
   const [isAddCourseOpen, setIsAddCourseOpen] = useState(false);
+  const [isScheduleLiveOpen, setIsScheduleLiveOpen] = useState(false);
   const [newCourseTitle, setNewCourseTitle] = useState('');
   const [newCourseCategory, setNewCourseCategory] = useState('Web & Software');
   const [newCourseLevel, setNewCourseLevel] = useState<'Beginner' | 'Intermediate' | 'Advanced'>('Intermediate');
@@ -269,6 +272,16 @@ export default function AdminDashboardPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsScheduleLiveOpen(true)}
+              className="gap-2 bg-red-950/40 border border-red-900/60 text-red-400 hover:bg-red-950/70 font-semibold text-xs shadow-md shadow-red-950/30"
+            >
+              <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+              <span>Assign Live Class</span>
+            </Button>
+
             <Button
               variant="secondary"
               size="sm"
@@ -827,6 +840,12 @@ export default function AdminDashboardPage() {
           </div>
         </div>
       )}
+
+      {/* Schedule Live Class Modal */}
+      <ScheduleLiveClassModal
+        isOpen={isScheduleLiveOpen}
+        onClose={() => setIsScheduleLiveOpen(false)}
+      />
     </div>
   );
 }

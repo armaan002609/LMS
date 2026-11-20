@@ -81,3 +81,19 @@ export interface AppNotification {
   read: boolean;
 }
 
+export interface LiveSession {
+  id: string;
+  courseId: string;
+  courseTitle: string;
+  topic: string;
+  instructorName: string;
+  scheduledTime: string;
+  meetingUrl: string;
+  platform: 'internal' | 'google-meet' | 'zoom' | 'teams' | 'custom';
+  status: 'live' | 'upcoming' | 'completed';
+  attendeeCount?: number;
+  agenda?: string;
+  createdAt: string;
+}
+
+

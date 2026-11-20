@@ -15,6 +15,7 @@ import { Course, CourseModuleItem, CourseResourceNote } from '@/lib/types';
 import { getCourseLabTemplate, CourseLabTemplate } from '@/lib/course-content';
 import { NotificationCenter } from '@/components/NotificationCenter';
 import { InstructorStudioModal } from '@/components/InstructorStudioModal';
+import { ScheduleLiveClassModal } from '@/components/ScheduleLiveClassModal';
 import {
   CheckCircle,
   ArrowLeft,
@@ -34,8 +35,15 @@ import {
   Pause,
   FileText,
   Upload,
-  Plus,
   Sparkles,
+  Mic,
+  MicOff,
+  VideoOff,
+  Hand,
+  Copy,
+  ExternalLink,
+  PhoneOff,
+  Check,
 } from 'lucide-react';
 
 export default function CoursePlayerPage({ params }: { params: { enrollmentId: string } }) {
@@ -48,6 +56,15 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   // Instructor studio state
   const [isInstructorStudioOpen, setIsInstructorStudioOpen] = useState(false);
+  const [isScheduleLiveOpen, setIsScheduleLiveOpen] = useState(false);
+
+  // Live room interactive state
+  const [isInLiveRoom, setIsInLiveRoom] = useState(false);
+  const [isMicMuted, setIsMicMuted] = useState(true);
+  const [isCamOff, setIsCamOff] = useState(true);
+  const [isHandRaised, setIsHandRaised] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [liveSidebarTab, setLiveSidebarTab] = useState<'chat' | 'participants'>('chat');
 
   // Video Player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -64,10 +81,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   // Live class chat state
   const [chatMessages, setChatMessages] = useState<Array<{ sender: string; time: string; text: string; role?: string }>>([
-    { sender: 'Instructor', time: '18:02', text: 'Welcome team! Session is live. Please ensure your environment is initialized.', role: 'instructor' },
-    { sender: 'Operator_91', time: '18:04', text: 'Target host is reachable over gateway.' },
-    { sender: 'Cadet_Z', time: '18:06', text: 'Will this recording be uploaded after the stream?' },
-    { sender: 'Instructor', time: '18:07', text: 'Yes, full recorded lectures are archived immediately under the Lecture tab.', role: 'instructor' },
+    { sender: 'Instructor (Host)', time: '18:02', text: 'Welcome team! Live broadcast is active. Feel free to ask questions in the chat.', role: 'instructor' },
+    { sender: 'Operator_91', time: '18:04', text: 'Audio and video are crystal clear.' },
+    { sender: 'Cadet_Z', time: '18:06', text: 'Are the slides uploaded under the Notes tab?' },
+    { sender: 'Instructor (Host)', time: '18:07', text: 'Yes, full architecture notes and diagrams are available under Study Notes & Files.', role: 'instructor' },
   ]);
   const [newChatInput, setNewChatInput] = useState('');
 
@@ -91,6 +108,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   useEffect(() => {
     loadCourseData();
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('tab') === 'live') {
+        setActiveTab('live');
+        setIsInLiveRoom(true);
+      }
+    }
   }, [params.enrollmentId]);
 
   const handleCommandSubmit = (e: React.FormEvent) => {
@@ -150,6 +174,40 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     setNewChatInput('');
   };
 
+  const handleQuickReaction = (reaction: string) => {
+    setChatMessages((prev) => [
+      ...prev,
+      {
+        sender: user?.name || 'You',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        text: reaction,
+      },
+    ]);
+  };
+
+  const handleToggleHand = () => {
+    const nextState = !isHandRaised;
+    setIsHandRaised(nextState);
+    if (nextState) {
+      setChatMessages((prev) => [
+        ...prev,
+        {
+          sender: user?.name || 'You',
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          text: '✋ Raised hand with a question for instructor.',
+        },
+      ]);
+    }
+  };
+
+  const handleCopyMeetingLink = () => {
+    if (typeof window !== 'undefined') {
+      navigator.clipboard.writeText(window.location.href);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    }
+  };
+
   const courseTitle = course?.title || 'Full Stack Development';
   const targetIp = course?.targetLabIp || template?.defaultHostIp || '10.10.15.50';
   const currentTemplate = template || getCourseLabTemplate(courseTitle, course?.category || 'Web & Software', targetIp);
@@ -189,15 +247,26 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           {/* Notification Center */}
           <NotificationCenter />
 
+          {/* Assign Live Class Button */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setIsScheduleLiveOpen(true)}
+            className="bg-red-950/40 border border-red-900/60 text-red-400 hover:bg-red-950/70 text-xs gap-1.5 font-semibold hidden sm:flex"
+          >
+            <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+            <span>Assign Live Class</span>
+          </Button>
+
           {/* Instructor Studio Button */}
           <Button
             variant="secondary"
             size="sm"
             onClick={() => setIsInstructorStudioOpen(true)}
-            className="bg-[#12121E] border-red-900/50 text-red-400 hover:bg-red-950/40 text-xs gap-1.5 font-semibold"
+            className="bg-[#12121E] border-zinc-800 text-zinc-300 hover:text-white text-xs gap-1.5 font-semibold"
           >
-            <Upload className="w-3.5 h-3.5 text-red-400" />
-            <span>Instructor Studio</span>
+            <Upload className="w-3.5 h-3.5 text-zinc-400" />
+            <span className="hidden md:inline">Instructor Studio</span>
           </Button>
 
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0E0E16] border border-zinc-800 text-zinc-300">
@@ -266,7 +335,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                   key={mod.id || idx}
                   onClick={() => {
                     if (mod.type === 'lecture') setActiveTab('lecture');
-                    else if (mod.type === 'live') setActiveTab('live');
+                    else if (mod.type === 'live') {
+                      setActiveTab('live');
+                      setIsInLiveRoom(true);
+                    }
                     else if (mod.type === 'notes') setActiveTab('notes');
                     else setActiveTab('guide');
                   }}
@@ -280,7 +352,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     {getModIcon()}
                     <span className="truncate">{mod.title}</span>
                   </div>
-                  <span className={`text-[10px] font-bold shrink-0 ml-1.5 ${mod.duration === 'LIVE' ? 'text-red-400' : 'text-zinc-400'}`}>
+                  <span className={`text-[10px] font-bold shrink-0 ml-1.5 ${mod.duration === 'LIVE' || mod.duration === 'LIVE NOW' ? 'text-red-400 animate-pulse' : 'text-zinc-400'}`}>
                     {mod.duration || '40 Min'}
                   </span>
                 </button>
@@ -289,22 +361,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
             {/* Quick Upload Button for Instructors */}
             <button
-              onClick={() => setIsInstructorStudioOpen(true)}
+              onClick={() => setIsScheduleLiveOpen(true)}
               className="mt-2 p-2.5 rounded-lg border border-dashed border-red-900/60 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-mono flex items-center justify-center gap-1.5 transition-all"
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span>+ Add Module or Notes</span>
+              <Radio className="w-3.5 h-3.5" />
+              <span>+ Assign Live Class Session</span>
             </button>
           </div>
 
-          {/* Isolated Box Notification Reminder */}
+          {/* Quick Joining Helper */}
           <div className="mt-auto p-3.5 rounded-xl bg-[#0B0B14] border border-zinc-800 text-xs text-zinc-400 flex flex-col gap-2">
             <span className="text-white font-bold flex items-center gap-1.5">
               <Sparkles className="w-3.5 h-3.5 text-red-500" />
-              <span>Instructor Updates</span>
+              <span>1-Click Live Studio</span>
             </span>
             <p className="text-[11px] leading-relaxed text-zinc-500">
-              Target machine is running live. Any newly scheduled lectures, notes, or lab guides will generate automated learner alerts.
+              Students automatically connect with low-latency WebRTC streaming, direct audio Q&amp;A, and real-time screen sharing.
             </p>
           </div>
         </aside>
@@ -326,7 +398,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             </button>
 
             <button
-              onClick={() => setActiveTab('live')}
+              onClick={() => {
+                setActiveTab('live');
+                setIsInLiveRoom(true);
+              }}
               className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
                 activeTab === 'live'
                   ? 'border-red-500 text-white font-bold'
@@ -334,7 +409,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               }`}
             >
               <Radio className="w-4 h-4 text-red-500 animate-pulse" />
-              <span>Live Class & Chat</span>
+              <span>Live Class &amp; Chat</span>
             </button>
 
             <button
@@ -372,7 +447,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               }`}
             >
               <FileText className="w-4 h-4" />
-              <span>Study Notes & Files</span>
+              <span>Study Notes &amp; Files</span>
             </button>
 
             <button
@@ -464,7 +539,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               {/* Lecture Description & Resources */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="md:col-span-2 flex flex-col gap-3">
-                  <h2 className="text-xl font-bold text-white">Lecture Overview: Core Architecture & Hands-on Implementation</h2>
+                  <h2 className="text-xl font-bold text-white">Lecture Overview: Core Architecture &amp; Hands-on Implementation</h2>
                   <p className="text-xs text-zinc-400 leading-relaxed">
                     In this session, senior instructors guide you through the fundamental building blocks of {courseTitle}.
                     Follow along with your live container cluster in the Terminal tab and review the reference guide.
@@ -474,19 +549,19 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     <span className="text-xs font-bold text-white font-mono uppercase text-red-400">Chapters:</span>
                     <ul className="text-xs space-y-1.5 font-mono text-zinc-300">
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400">
-                        <span>00:00 — Introduction & Enterprise Architecture</span>
+                        <span>00:00 — Introduction &amp; Enterprise Architecture</span>
                         <span className="text-zinc-500">08:15</span>
                       </li>
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400 text-red-400">
-                        <span>08:15 — Practical Setup & Environment Initialization</span>
+                        <span>08:15 — Practical Setup &amp; Environment Initialization</span>
                         <span className="text-zinc-500">18:42</span>
                       </li>
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400">
-                        <span>18:42 — Core Engineering Patterns & Execution</span>
+                        <span>18:42 — Core Engineering Patterns &amp; Execution</span>
                         <span className="text-zinc-500">32:10</span>
                       </li>
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400">
-                        <span>32:10 — Production Deployment & Code Checkpoint</span>
+                        <span>32:10 — Production Deployment &amp; Code Checkpoint</span>
                         <span className="text-zinc-500">48:50</span>
                       </li>
                     </ul>
@@ -516,86 +591,324 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             </div>
           )}
 
-          {/* TAB 2: LIVE INTERACTIVE CLASS */}
+          {/* TAB 2: LIVE INTERACTIVE CLASS & USER-FRIENDLY STUDIO */}
           {activeTab === 'live' && (
             <div className="flex-1 flex flex-col md:flex-row h-full">
               <div className="flex-1 p-6 md:p-8 flex flex-col gap-4">
-                <div className="relative aspect-video w-full bg-[#020204] border border-red-950/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between">
-                  <div className="p-4 flex items-center justify-between z-10 bg-gradient-to-b from-black/80 to-transparent">
-                    <span className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
-                      <Radio className="w-3.5 h-3.5" />
-                      LIVE STREAM BROADCAST
-                    </span>
-                    <span className="text-xs font-mono text-zinc-300 flex items-center gap-1.5">
-                      <Users className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>38 Operators Attending</span>
-                    </span>
-                  </div>
+                {/* ACTIVE LIVE ROOM STAGE */}
+                {isInLiveRoom ? (
+                  <div className="relative aspect-video w-full bg-[#020204] border-2 border-red-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group">
+                    {/* Top Room Banner */}
+                    <div className="p-4 flex items-center justify-between z-10 bg-gradient-to-b from-black/90 to-transparent">
+                      <div className="flex items-center gap-2">
+                        <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
+                          <Radio className="w-3.5 h-3.5" />
+                          <span>LIVE STREAM BROADCAST</span>
+                        </span>
+                        <span className="text-[11px] font-bold text-white hidden sm:inline">
+                          {courseTitle} — Masterclass
+                        </span>
+                      </div>
 
-                  <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-                    <div className="w-16 h-16 rounded-full bg-red-950/80 border border-red-800 flex items-center justify-center text-red-400 mb-3">
-                      <Radio className="w-8 h-8 animate-ping" />
+                      <div className="flex items-center gap-2 text-xs font-mono text-zinc-300">
+                        <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-900/60 text-[10px] font-bold flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                          CONNECTED (24ms)
+                        </span>
+                        <span className="text-zinc-400 flex items-center gap-1">
+                          <Users className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>42 in Room</span>
+                        </span>
+                      </div>
                     </div>
-                    <h3 className="text-base font-bold text-white">Live Cohort Session in Progress</h3>
-                    <p className="text-xs text-zinc-400 mt-1 max-w-md">
-                      Instructor is broadcasting live for <strong>{courseTitle}</strong>. Join the interactive voice/video room below.
-                    </p>
-                    <Button
-                      variant="primary"
-                      size="md"
-                      onClick={() => alert(`Launching interactive Live Classroom for ${courseTitle}...`)}
-                      className="mt-4 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 font-bold text-xs gap-2 shadow-lg shadow-red-950/50"
-                    >
-                      <Radio className="w-4 h-4" />
-                      <span>Join Interactive Live Room</span>
-                    </Button>
-                  </div>
 
-                  <div className="p-4 bg-gradient-to-t from-black/90 to-transparent text-xs font-mono text-zinc-400 flex items-center justify-between">
-                    <span>Host: Senior Lead Instructor (Dark Space Academy)</span>
-                    <span className="text-emerald-400">Latency: 28ms (HD 1080p 60fps)</span>
-                  </div>
-                </div>
+                    {/* Active Stream Stage Screen (Simulation of screen share / camera) */}
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center relative">
+                      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(220,38,38,0.1),rgba(0,0,0,0.92))] flex flex-col items-center justify-center p-8">
+                        {/* Instructor Presentation HUD */}
+                        <div className="w-full max-w-xl bg-[#09090F]/90 border border-zinc-800 rounded-xl p-5 shadow-2xl text-left flex flex-col gap-3 backdrop-blur-md">
+                          <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                            <span className="text-[10px] font-mono uppercase text-red-400 font-bold flex items-center gap-1.5">
+                              <Radio className="w-3 h-3 text-red-500 animate-pulse" />
+                              <span>INSTRUCTOR PRESENTATION SCREEN · 1080p 60FPS</span>
+                            </span>
+                            <span className="text-[10px] font-mono text-zinc-500">Audio: HD Stereo</span>
+                          </div>
 
+                          <div className="font-mono text-xs text-zinc-300 space-y-1">
+                            <p className="text-emerald-400 font-bold">// Live Code Architecture &amp; System Demo</p>
+                            <p className="text-zinc-400">&gt; Target Node: <strong className="text-white">{targetIp}</strong></p>
+                            <p className="text-zinc-400">&gt; Session: <span className="text-red-400 font-semibold">{courseTitle}</span></p>
+                            <p className="text-zinc-500 text-[11px] pt-1">
+                              Instructor is currently presenting slides and demonstrating real-time configuration.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Hand Raised Banner */}
+                        {isHandRaised && (
+                          <div className="mt-4 px-3 py-1.5 rounded-full bg-amber-950/80 border border-amber-800/80 text-amber-300 text-xs font-mono flex items-center gap-2 animate-bounce">
+                            <Hand className="w-3.5 h-3.5 text-amber-400" />
+                            <span>Your hand is raised! Instructor has been alerted.</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Interactive Bottom Control Bar */}
+                    <div className="relative z-10 p-4 bg-gradient-to-t from-black/95 to-transparent flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {/* Mic Button */}
+                        <button
+                          onClick={() => setIsMicMuted(!isMicMuted)}
+                          className={`p-2.5 rounded-full border transition-all ${
+                            isMicMuted
+                              ? 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
+                              : 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
+                          }`}
+                          title={isMicMuted ? 'Unmute Mic' : 'Mute Mic'}
+                        >
+                          {isMicMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                        </button>
+
+                        {/* Camera Button */}
+                        <button
+                          onClick={() => setIsCamOff(!isCamOff)}
+                          className={`p-2.5 rounded-full border transition-all ${
+                            isCamOff
+                              ? 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
+                              : 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
+                          }`}
+                          title={isCamOff ? 'Turn on Camera' : 'Turn off Camera'}
+                        >
+                          {isCamOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
+                        </button>
+
+                        {/* Raise Hand Button */}
+                        <button
+                          onClick={handleToggleHand}
+                          className={`px-3 py-2 rounded-full border text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
+                            isHandRaised
+                              ? 'bg-amber-600 border-amber-500 text-white shadow-md shadow-amber-950'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:text-white'
+                          }`}
+                          title="Raise Hand to Ask Question"
+                        >
+                          <Hand className="w-3.5 h-3.5" />
+                          <span>{isHandRaised ? 'Hand Raised' : 'Raise Hand'}</span>
+                        </button>
+                      </div>
+
+                      {/* Right controls: Share link, external meet, leave */}
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={handleCopyMeetingLink}
+                          className="px-2.5 py-1.5 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5"
+                          title="Copy Classroom Room Link"
+                        >
+                          {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
+                          <span>{copiedLink ? 'Copied' : 'Share'}</span>
+                        </button>
+
+                        <a
+                          href="https://meet.google.com/dss-live-class"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hidden sm:inline-flex"
+                        >
+                          <button
+                            className="px-2.5 py-1.5 rounded-lg bg-[#0E0E18] border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1"
+                            title="Open Google Meet Backup"
+                          >
+                            <span>Google Meet</span>
+                            <ExternalLink className="w-3 h-3 text-red-400" />
+                          </button>
+                        </a>
+
+                        {/* Leave Room Button */}
+                        <button
+                          onClick={() => setIsInLiveRoom(false)}
+                          className="px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1 shadow-md shadow-red-950"
+                          title="Leave Live Studio"
+                        >
+                          <PhoneOff className="w-3.5 h-3.5" />
+                          <span>Leave</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  /* LOBBY / PREVIEW STATE */
+                  <div className="relative aspect-video w-full bg-[#020204] border border-red-950/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between">
+                    <div className="p-4 flex items-center justify-between z-10 bg-gradient-to-b from-black/80 to-transparent">
+                      <span className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
+                        <Radio className="w-3.5 h-3.5" />
+                        LIVE STREAM BROADCAST
+                      </span>
+                      <span className="text-xs font-mono text-zinc-300 flex items-center gap-1.5">
+                        <Users className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>42 Operators Attending</span>
+                      </span>
+                    </div>
+
+                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+                      <div className="w-16 h-16 rounded-full bg-red-950/80 border border-red-800 flex items-center justify-center text-red-400 mb-3">
+                        <Radio className="w-8 h-8 animate-ping" />
+                      </div>
+                      <h3 className="text-base font-bold text-white">Live Cohort Session in Progress</h3>
+                      <p className="text-xs text-zinc-400 mt-1 max-w-md">
+                        Instructor is broadcasting live for <strong>{courseTitle}</strong>. Join the interactive voice/video room with 1 click.
+                      </p>
+                      <Button
+                        variant="primary"
+                        size="md"
+                        onClick={() => setIsInLiveRoom(true)}
+                        className="mt-4 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 font-bold text-xs gap-2 shadow-lg shadow-red-950/50 hover:scale-105 transition-all"
+                      >
+                        <Radio className="w-4 h-4" />
+                        <span>🚀 Join Live Class (1-Click)</span>
+                      </Button>
+                    </div>
+
+                    <div className="p-4 bg-gradient-to-t from-black/90 to-transparent text-xs font-mono text-zinc-400 flex items-center justify-between">
+                      <span>Host: Senior Lead Instructor (Dark Space Academy)</span>
+                      <span className="text-emerald-400">Latency: 24ms (HD 1080p 60fps)</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Quick Emoji Reaction Bar (When in live room) */}
+                {isInLiveRoom && (
+                  <div className="p-3 bg-[#09090F] border border-zinc-800 rounded-xl flex items-center justify-between">
+                    <span className="text-xs font-mono text-zinc-400">Instant Reactions:</span>
+                    <div className="flex items-center gap-2">
+                      {[
+                        { emoji: '👍', label: 'Great' },
+                        { emoji: '✋', label: 'Question' },
+                        { emoji: '🔥', label: 'Awesome' },
+                        { emoji: '💡', label: 'Understood' },
+                        { emoji: '👏', label: 'Clap' },
+                      ].map((item) => (
+                        <button
+                          key={item.label}
+                          onClick={() => handleQuickReaction(`${item.emoji} ${item.label}`)}
+                          className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-red-600 hover:bg-zinc-800 text-xs font-mono flex items-center gap-1 transition-all"
+                        >
+                          <span>{item.emoji}</span>
+                          <span className="text-zinc-400 hover:text-white hidden sm:inline">{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Next Live Schedule Banner */}
                 <div className="bg-[#0B0B10] border border-[#1E1E28] rounded-xl p-4 flex items-center justify-between text-xs">
                   <div>
-                    <span className="font-bold text-white block">Next Scheduled Live Session</span>
+                    <span className="font-bold text-white block">Scheduled Live Sessions &amp; Cohort Reviews</span>
                     <span className="text-zinc-400 text-[11px]">{courseTitle} Q&amp;A &amp; System Architecture Review · Tomorrow at 18:00 IST</span>
                   </div>
                   <Button
                     variant="secondary"
                     size="sm"
-                    onClick={() => setIsInstructorStudioOpen(true)}
-                    className="bg-[#12121A] text-xs text-red-400 border-zinc-800"
+                    onClick={() => setIsScheduleLiveOpen(true)}
+                    className="bg-[#12121A] text-xs text-red-400 border-zinc-800 hover:border-red-900/60"
                   >
-                    Manage Schedule
+                    + Assign Next Class
                   </Button>
                 </div>
               </div>
 
-              {/* Live Classroom Chat */}
+              {/* Live Classroom Chat & Participants Sidebar */}
               <div className="w-full md:w-80 border-l border-zinc-800/80 bg-[#08080C] flex flex-col justify-between p-4">
                 <div>
+                  {/* Tab Selector between Chat and Participants */}
                   <div className="pb-3 border-b border-zinc-800 flex items-center justify-between">
-                    <span className="text-xs font-bold text-white uppercase tracking-wider font-mono">Live Session Chat</span>
+                    <div className="flex items-center gap-3 text-xs font-mono">
+                      <button
+                        onClick={() => setLiveSidebarTab('chat')}
+                        className={`pb-1 border-b-2 font-bold transition-all ${
+                          liveSidebarTab === 'chat'
+                            ? 'border-red-500 text-white'
+                            : 'border-transparent text-zinc-500 hover:text-white'
+                        }`}
+                      >
+                        Live Chat
+                      </button>
+                      <button
+                        onClick={() => setLiveSidebarTab('participants')}
+                        className={`pb-1 border-b-2 font-bold transition-all flex items-center gap-1 ${
+                          liveSidebarTab === 'participants'
+                            ? 'border-red-500 text-white'
+                            : 'border-transparent text-zinc-500 hover:text-white'
+                        }`}
+                      >
+                        <span>Operators (42)</span>
+                      </button>
+                    </div>
+
                     <span className="text-[10px] text-emerald-400 font-mono">● Online</span>
                   </div>
 
-                  <div className="py-4 space-y-3 overflow-y-auto max-h-[400px]">
-                    {chatMessages.map((msg, i) => (
-                      <div key={i} className="text-xs flex flex-col gap-0.5">
-                        <div className="flex items-center gap-1.5 font-mono">
-                          <span className={`font-bold ${msg.role === 'instructor' ? 'text-red-400' : 'text-zinc-300'}`}>
-                            {msg.sender}
-                          </span>
-                          <span className="text-[10px] text-zinc-600">{msg.time}</span>
+                  {/* TAB A: LIVE CHAT */}
+                  {liveSidebarTab === 'chat' ? (
+                    <div className="py-4 space-y-3 overflow-y-auto max-h-[380px]">
+                      {chatMessages.map((msg, i) => (
+                        <div key={i} className="text-xs flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5 font-mono">
+                            <span className={`font-bold ${msg.role === 'instructor' ? 'text-red-400' : 'text-zinc-300'}`}>
+                              {msg.sender}
+                            </span>
+                            <span className="text-[10px] text-zinc-600">{msg.time}</span>
+                          </div>
+                          <p className="text-zinc-300 bg-[#0D0D14] p-2 rounded-lg border border-zinc-900 leading-snug">
+                            {msg.text}
+                          </p>
                         </div>
-                        <p className="text-zinc-400 bg-[#0D0D14] p-2 rounded-lg border border-zinc-900 leading-snug">
-                          {msg.text}
-                        </p>
+                      ))}
+                    </div>
+                  ) : (
+                    /* TAB B: ACTIVE PARTICIPANTS */
+                    <div className="py-4 space-y-2 overflow-y-auto max-h-[380px] text-xs font-mono">
+                      <div className="p-2 rounded-lg bg-red-950/30 border border-red-900/40 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center text-[10px] font-bold text-white">
+                            I
+                          </div>
+                          <div>
+                            <span className="font-bold text-red-400 block">Instructor (Host)</span>
+                            <span className="text-[10px] text-zinc-500">Speaking</span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-emerald-400">● Mic ON</span>
                       </div>
-                    ))}
-                  </div>
+
+                      <div className="p-2 rounded-lg bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-300">
+                            {user?.name?.charAt(0) || 'Y'}
+                          </div>
+                          <div>
+                            <span className="font-bold text-white block">{user?.name || 'You'}</span>
+                            <span className="text-[10px] text-zinc-500">Operator</span>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-zinc-500">Muted</span>
+                      </div>
+
+                      {['Operator_91', 'Cadet_Z', 'Dev_Lead', 'Security_Cadet', 'Arch_Master'].map((name) => (
+                        <div key={name} className="p-2 rounded-lg bg-[#07070A] border border-zinc-900 flex items-center justify-between text-zinc-400">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-zinc-900 flex items-center justify-center text-[10px] font-bold text-zinc-500">
+                              {name.charAt(0)}
+                            </div>
+                            <span>{name}</span>
+                          </div>
+                          <span className="text-[10px] text-zinc-600">Attending</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <form onSubmit={handleSendChat} className="pt-3 border-t border-zinc-800 flex items-center gap-2">
@@ -603,7 +916,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     type="text"
                     value={newChatInput}
                     onChange={(e) => setNewChatInput(e.target.value)}
-                    placeholder="Ask instructor a question..."
+                    placeholder="Ask question or message cohort..."
                     className="flex-1 bg-[#050508] border border-zinc-800 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-red-600"
                   />
                   <button type="submit" className="p-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white">
@@ -820,6 +1133,15 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         onClose={() => setIsInstructorStudioOpen(false)}
         courseId={course?.id || params.enrollmentId}
         courseTitle={courseTitle}
+        onSuccess={loadCourseData}
+      />
+
+      {/* Schedule Live Class Modal */}
+      <ScheduleLiveClassModal
+        isOpen={isScheduleLiveOpen}
+        onClose={() => setIsScheduleLiveOpen(false)}
+        defaultCourseId={course?.id || params.enrollmentId}
+        defaultCourseTitle={courseTitle}
         onSuccess={loadCourseData}
       />
     </div>

@@ -1,4 +1,4 @@
-import { User, Course, Enrollment, UserWithCourses, CourseModuleItem, CourseResourceNote, AppNotification } from './types';
+import { User, Course, Enrollment, UserWithCourses, CourseModuleItem, CourseResourceNote, AppNotification, LiveSession } from './types';
 import { getSupabaseBrowserClient } from './supabase';
 import { getCourseLabTemplate } from './course-content';
 
@@ -808,4 +808,127 @@ export async function clearAllNotifications(): Promise<void> {
     console.error('Failed clearing notifications', err);
   }
 }
+
+// ==========================================
+// LIVE SESSIONS & STREAMING STORE
+// ==========================================
+
+const LOCAL_STORAGE_KEY_LIVE_SESSIONS = 'dss_live_sessions_v1';
+
+export const INITIAL_LIVE_SESSIONS: LiveSession[] = [
+  {
+    id: 'live-session-1',
+    courseId: 'c0000000-0000-0000-0000-000000000101',
+    courseTitle: 'Full Stack Development',
+    topic: 'Next.js 14 Server Actions, Microservices Architecture & Production Deployments',
+    instructorName: 'Chief Technology Instructor (Dark Space)',
+    scheduledTime: 'LIVE NOW',
+    meetingUrl: 'https://meet.darkspacesecurity.io/session-mern-alpha',
+    platform: 'internal',
+    status: 'live',
+    attendeeCount: 42,
+    agenda: 'Hands-on code review of production API gateway, Redis caching layer, and Next.js SSR hydration.',
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'live-session-2',
+    courseId: 'c0000000-0000-0000-0000-000000000201',
+    courseTitle: 'Cyber Security',
+    topic: 'Adversary Emulation: Active Directory Kerberoasting & SIEM Detection',
+    instructorName: 'Senior Red Team Lead',
+    scheduledTime: 'Tomorrow at 18:00 IST',
+    meetingUrl: 'https://meet.darkspacesecurity.io/session-cyber-sec',
+    platform: 'internal',
+    status: 'upcoming',
+    attendeeCount: 65,
+    agenda: 'Live demonstration of Kerberos ticket extraction, hashcat cracking, and Defender evasion.',
+    createdAt: new Date().toISOString(),
+  },
+];
+
+export async function fetchLiveSessions(courseId?: string): Promise<LiveSession[]> {
+  if (typeof window === 'undefined') {
+    return courseId ? INITIAL_LIVE_SESSIONS.filter((s) => s.courseId === courseId || s.courseTitle.toLowerCase().includes(courseId.toLowerCase())) : INITIAL_LIVE_SESSIONS;
+  }
+
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS);
+    if (!stored) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS, JSON.stringify(INITIAL_LIVE_SESSIONS));
+      return courseId ? INITIAL_LIVE_SESSIONS.filter((s) => s.courseId === courseId || s.courseTitle.toLowerCase().includes(courseId.toLowerCase())) : INITIAL_LIVE_SESSIONS;
+    }
+    const list: LiveSession[] = JSON.parse(stored);
+    return courseId ? list.filter((s) => s.courseId === courseId || s.courseTitle.toLowerCase().includes(courseId.toLowerCase())) : list;
+  } catch {
+    return INITIAL_LIVE_SESSIONS;
+  }
+}
+
+export async function createLiveSession(sessionData: Omit<LiveSession, 'id' | 'createdAt'>): Promise<LiveSession> {
+  const newSession: LiveSession = {
+    ...sessionData,
+    id: 'live_' + Date.now(),
+    createdAt: new Date().toISOString(),
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      const current = await fetchLiveSessions();
+      const updated = [newSession, ...current.filter((s) => s.id !== newSession.id)];
+      localStorage.setItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS, JSON.stringify(updated));
+      window.dispatchEvent(new CustomEvent('dss-live-sessions-updated', { detail: newSession }));
+    } catch (err) {
+      console.error('Failed saving live session', err);
+    }
+  }
+
+  // Also auto-add as a course module so it shows in the syllabus outline
+  await addCourseModule({
+    courseId: sessionData.courseId,
+    title: `Live Class: ${sessionData.topic}`,
+    type: 'live',
+    duration: sessionData.status === 'live' ? 'LIVE NOW' : 'SCHEDULED',
+    summary: sessionData.agenda || `Live session for ${sessionData.courseTitle}`,
+    scheduledTime: sessionData.scheduledTime,
+  }, sessionData.courseTitle);
+
+  // Automatically dispatch notification to learners
+  await addNotification({
+    courseId: sessionData.courseId,
+    courseTitle: sessionData.courseTitle,
+    title: sessionData.status === 'live' ? '🔴 Live Interactive Class Started!' : '📅 New Live Class Scheduled',
+    message: sessionData.status === 'live'
+      ? `Live class "${sessionData.topic}" is in session right now. Click to join immediately!`
+      : `Live session "${sessionData.topic}" scheduled for ${sessionData.scheduledTime}.`,
+    type: 'live',
+    actionLink: `/learn/${sessionData.courseId}`,
+  });
+
+  return newSession;
+}
+
+export async function updateLiveSessionStatus(id: string, status: 'live' | 'upcoming' | 'completed'): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const list = await fetchLiveSessions();
+    const updated = list.map((s) => (s.id === id ? { ...s, status } : s));
+    localStorage.setItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS, JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('dss-live-sessions-updated'));
+  } catch (err) {
+    console.error('Failed updating live session status', err);
+  }
+}
+
+export async function deleteLiveSession(id: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const list = await fetchLiveSessions();
+    const updated = list.filter((s) => s.id !== id);
+    localStorage.setItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS, JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('dss-live-sessions-updated'));
+  } catch (err) {
+    console.error('Failed deleting live session', err);
+  }
+}
+
 
