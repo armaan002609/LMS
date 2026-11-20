@@ -42,7 +42,7 @@ export function LiveSessionHUD() {
   const liveSession = sessions.find((s) => s.status === 'live');
   const upcomingSession = sessions.find((s) => s.status === 'upcoming');
 
-  const canManage = user?.role === 'admin' || user?.role === 'instructor';
+  const canManage = Boolean(user && user.role !== 'learner' && (user.role === 'admin' || user.role === 'instructor'));
 
   if (!liveSession && !upcomingSession && !canManage) {
     return null;

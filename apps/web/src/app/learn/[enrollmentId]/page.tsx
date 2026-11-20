@@ -211,6 +211,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const courseTitle = course?.title || 'Full Stack Development';
   const targetIp = course?.targetLabIp || template?.defaultHostIp || '10.10.15.50';
   const currentTemplate = template || getCourseLabTemplate(courseTitle, course?.category || 'Web & Software', targetIp);
+  const isInstructorOrAdmin = Boolean(user && user.role !== 'learner' && (user.role === 'admin' || user.role === 'instructor'));
 
   return (
     <div className="min-h-screen flex flex-col bg-[#050508] text-[var(--color-text)] font-sans">
@@ -247,27 +248,31 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           {/* Notification Center */}
           <NotificationCenter />
 
-          {/* Assign Live Class Button */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setIsScheduleLiveOpen(true)}
-            className="bg-red-950/40 border border-red-900/60 text-red-400 hover:bg-red-950/70 text-xs gap-1.5 font-semibold hidden sm:flex"
-          >
-            <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
-            <span>Assign Live Class</span>
-          </Button>
+          {/* Assign Live Class Button (Instructor/Admin only) */}
+          {isInstructorOrAdmin && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsScheduleLiveOpen(true)}
+              className="bg-red-950/40 border border-red-900/60 text-red-400 hover:bg-red-950/70 text-xs gap-1.5 font-semibold hidden sm:flex"
+            >
+              <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+              <span>Assign Live Class</span>
+            </Button>
+          )}
 
-          {/* Instructor Studio Button */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setIsInstructorStudioOpen(true)}
-            className="bg-[#12121E] border-zinc-800 text-zinc-300 hover:text-white text-xs gap-1.5 font-semibold"
-          >
-            <Upload className="w-3.5 h-3.5 text-zinc-400" />
-            <span className="hidden md:inline">Instructor Studio</span>
-          </Button>
+          {/* Instructor Studio Button (Instructor/Admin only) */}
+          {isInstructorOrAdmin && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsInstructorStudioOpen(true)}
+              className="bg-[#12121E] border-zinc-800 text-zinc-300 hover:text-white text-xs gap-1.5 font-semibold"
+            >
+              <Upload className="w-3.5 h-3.5 text-zinc-400" />
+              <span className="hidden md:inline">Instructor Studio</span>
+            </Button>
+          )}
 
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0E0E16] border border-zinc-800 text-zinc-300">
             <Clock className="w-3.5 h-3.5 text-amber-500" />
@@ -359,14 +364,16 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               );
             })}
 
-            {/* Quick Upload Button for Instructors */}
-            <button
-              onClick={() => setIsScheduleLiveOpen(true)}
-              className="mt-2 p-2.5 rounded-lg border border-dashed border-red-900/60 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-mono flex items-center justify-center gap-1.5 transition-all"
-            >
-              <Radio className="w-3.5 h-3.5" />
-              <span>+ Assign Live Class Session</span>
-            </button>
+            {/* Quick Upload Button for Instructors ONLY */}
+            {isInstructorOrAdmin && (
+              <button
+                onClick={() => setIsScheduleLiveOpen(true)}
+                className="mt-2 p-2.5 rounded-lg border border-dashed border-red-900/60 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-mono flex items-center justify-center gap-1.5 transition-all"
+              >
+                <Radio className="w-3.5 h-3.5" />
+                <span>+ Assign Live Class Session</span>
+              </button>
+            )}
           </div>
 
           {/* Quick Joining Helper */}
@@ -808,14 +815,16 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     <span className="font-bold text-white block">Scheduled Live Sessions &amp; Cohort Reviews</span>
                     <span className="text-zinc-400 text-[11px]">{courseTitle} Q&amp;A &amp; System Architecture Review · Tomorrow at 18:00 IST</span>
                   </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setIsScheduleLiveOpen(true)}
-                    className="bg-[#12121A] text-xs text-red-400 border-zinc-800 hover:border-red-900/60"
-                  >
-                    + Assign Next Class
-                  </Button>
+                  {isInstructorOrAdmin && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setIsScheduleLiveOpen(true)}
+                      className="bg-[#12121A] text-xs text-red-400 border-zinc-800 hover:border-red-900/60"
+                    >
+                      + Assign Next Class
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -1025,15 +1034,17 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                   </p>
                 </div>
 
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => setIsInstructorStudioOpen(true)}
-                  className="bg-red-600 hover:bg-red-700 text-xs font-bold gap-1.5 self-start sm:self-auto"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Upload New Notes</span>
-                </Button>
+                {isInstructorOrAdmin && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => setIsInstructorStudioOpen(true)}
+                    className="bg-red-600 hover:bg-red-700 text-xs font-bold gap-1.5 self-start sm:self-auto"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload New Notes</span>
+                  </Button>
+                )}
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
