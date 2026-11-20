@@ -627,13 +627,14 @@ export async function addCourseModule(moduleData: Omit<CourseModuleItem, 'id' | 
   }
 
   // Automatically trigger notification for learners!
+  const tabParam = moduleData.type === 'live' ? '?tab=live' : moduleData.type === 'lecture' ? '?tab=lecture' : moduleData.type === 'notes' ? '?tab=notes' : '';
   await addNotification({
     courseId: moduleData.courseId,
     courseTitle: courseTitle || 'Course Curriculum',
     title: moduleData.type === 'lecture' ? 'New Recorded Lecture Uploaded' : moduleData.type === 'live' ? 'Live Interactive Class Scheduled' : 'New Module Added',
     message: `Instructor added "${newModule.title}" to ${courseTitle || 'the course'}.`,
     type: moduleData.type === 'live' ? 'live' : moduleData.type === 'notes' ? 'notes' : 'lecture',
-    actionLink: `/learn/${moduleData.courseId}`,
+    actionLink: `/learn/${moduleData.courseId}${tabParam}`,
   });
 
   return newModule;
@@ -694,7 +695,7 @@ export async function addCourseNote(noteData: Omit<CourseResourceNote, 'id' | 'u
     title: 'New Study Notes & Materials Uploaded',
     message: `Instructor published "${newNote.title}" in ${courseTitle || 'your course'}.`,
     type: 'notes',
-    actionLink: `/learn/${noteData.courseId}`,
+    actionLink: `/learn/${noteData.courseId}?tab=notes`,
   });
 
   return newNote;
@@ -849,7 +850,7 @@ export async function createLiveSession(sessionData: Omit<LiveSession, 'id' | 'c
       ? `Live class "${sessionData.topic}" is in session right now. Click to join immediately!`
       : `Live session "${sessionData.topic}" scheduled for ${sessionData.scheduledTime}.`,
     type: 'live',
-    actionLink: `/learn/${sessionData.courseId}`,
+    actionLink: `/learn/${sessionData.courseId}?tab=live`,
   });
 
   return newSession;

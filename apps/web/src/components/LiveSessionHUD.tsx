@@ -32,9 +32,17 @@ export function LiveSessionHUD() {
       loadSessions();
     };
 
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'dss_live_sessions_v1') {
+        loadSessions();
+      }
+    };
+
     window.addEventListener('dss-live-sessions-updated', handleUpdate);
+    window.addEventListener('storage', handleStorage);
     return () => {
       window.removeEventListener('dss-live-sessions-updated', handleUpdate);
+      window.removeEventListener('storage', handleStorage);
     };
   }, []);
 

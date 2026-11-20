@@ -46,15 +46,33 @@ export function NotificationCenter() {
       setActiveToast(newNotif);
       setTimeout(() => {
         setActiveToast((current) => (current?.id === newNotif.id ? null : current));
-      }, 6000);
+      }, 7000);
+    };
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'dss_app_notifications_v1' && e.newValue) {
+        try {
+          const list: AppNotification[] = JSON.parse(e.newValue);
+          setNotifications(list);
+          const newest = list[0];
+          if (newest && !newest.read) {
+            setActiveToast(newest);
+            setTimeout(() => {
+              setActiveToast((current) => (current?.id === newest.id ? null : current));
+            }, 7000);
+          }
+        } catch {}
+      }
     };
 
     window.addEventListener('dss-notifications-updated', handleUpdate);
     window.addEventListener('dss-new-notification', handleNewNotif);
+    window.addEventListener('storage', handleStorage);
 
     return () => {
       window.removeEventListener('dss-notifications-updated', handleUpdate);
       window.removeEventListener('dss-new-notification', handleNewNotif);
+      window.removeEventListener('storage', handleStorage);
     };
   }, []);
 
