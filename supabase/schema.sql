@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     name TEXT NOT NULL,
     password_hash TEXT NOT NULL DEFAULT 'password',
     role TEXT NOT NULL DEFAULT 'learner' CHECK (role IN ('admin', 'learner', 'instructor')),
+    assigned_instructor_id UUID REFERENCES public.users(id) ON DELETE SET NULL,
     organization_id UUID REFERENCES public.organizations(id) ON DELETE CASCADE,
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
 );

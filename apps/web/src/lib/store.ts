@@ -333,6 +333,8 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
             role: u.role,
             organizationId: u.organization_id || 'darkspace',
             createdAt: u.created_at,
+            assignedInstructorId: u.assigned_instructor_id || undefined,
+            assignedInstructorName: u.assigned_instructor_name || undefined,
             assignedCourses: userEnrollments.map((e: any) => {
               const matchedCourse = courses.find((c) => c.id === e.course_id) || e.courses;
               return {
@@ -468,7 +470,20 @@ export async function updateCourseProgress(userId: string, courseId: string, pro
   return true;
 }
 
-export async function createNewUser(name: string, email: string, role: 'admin' | 'learner' | 'instructor', initialCourseId?: string): Promise<User> {
+export async function createNewUser(
+  name: string,
+  email: string,
+  role: 'admin' | 'learner' | 'instructor',
+  initialCourseId?: string,
+  assignedInstructorId?: string
+): Promise<User> {
+  let assignedInstructorName: string | undefined;
+  if (assignedInstructorId) {
+    const existingUsers = getLocalUsers();
+    const inst = existingUsers.find((u) => u.id === assignedInstructorId);
+    if (inst) assignedInstructorName = inst.name;
+  }
+
   const newUser: User = {
     id: 'u_' + Date.now(),
     name,
@@ -476,6 +491,8 @@ export async function createNewUser(name: string, email: string, role: 'admin' |
     role,
     organizationId: 'darkspace',
     createdAt: new Date().toISOString(),
+    assignedInstructorId: role === 'learner' ? assignedInstructorId : undefined,
+    assignedInstructorName: role === 'learner' ? assignedInstructorName : undefined,
   };
 
   const supabase = getSupabaseBrowserClient();
@@ -486,6 +503,7 @@ export async function createNewUser(name: string, email: string, role: 'admin' |
         name,
         role,
         organization_id: 'a0000000-0000-0000-0000-000000000001',
+        assigned_instructor_id: assignedInstructorId || null,
       }).select().single();
       if (!error && data) {
         newUser.id = data.id;
@@ -508,7 +526,147 @@ export async function createNewUser(name: string, email: string, role: 'admin' |
     await assignCourse(newUser.id, initialCourseId);
   }
 
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('dss-users-updated'));
+  }
+
   return newUser;
+}
+
+export async function assignLearnerToInstructor(learnerId: string, instructorId: string): Promise<boolean> {
+  const users = getLocalUsers();
+  const instructor = users.find((u) => u.id === instructorId && u.role === 'instructor');
+  const instructorName = instructor ? instructor.name : undefined;
+
+  const updatedUsers = users.map((u) => {
+    if (u.id === learnerId) {
+      return {
+        ...u,
+        assignedInstructorId: instructorId,
+        assignedInstructorName: instructorName,
+      };
+    }
+    return u;
+  });
+
+  saveLocalUsers(updatedUsers);
+
+  // If Supabase connected, update
+  const supabase = getSupabaseBrowserClient();
+  if (supabase) {
+    try {
+      await supabase.from('users').update({ assigned_instructor_id: instructorId }).eq('id', learnerId);
+    } catch (e) {
+      console.warn('Supabase assign instructor error', e);
+    }
+  }
+
+  // Also update active session if current user is this learner
+  if (typeof window !== 'undefined') {
+    try {
+      const activeSession = localStorage.getItem('dss_active_user_session');
+      if (activeSession) {
+        const parsed = JSON.parse(activeSession);
+        if (parsed.id === learnerId) {
+          localStorage.setItem(
+            'dss_active_user_session',
+            JSON.stringify({
+              ...parsed,
+              assignedInstructorId: instructorId,
+              assignedInstructorName: instructorName,
+            })
+          );
+        }
+      }
+    } catch {}
+    window.dispatchEvent(new CustomEvent('dss-users-updated'));
+  }
+
+  return true;
+}
+
+export async function unassignLearnerFromInstructor(learnerId: string): Promise<boolean> {
+  const users = getLocalUsers();
+  const updatedUsers = users.map((u) => {
+    if (u.id === learnerId) {
+      const copy = { ...u };
+      delete copy.assignedInstructorId;
+      delete copy.assignedInstructorName;
+      return copy;
+    }
+    return u;
+  });
+
+  saveLocalUsers(updatedUsers);
+
+  const supabase = getSupabaseBrowserClient();
+  if (supabase) {
+    try {
+      await supabase.from('users').update({ assigned_instructor_id: null }).eq('id', learnerId);
+    } catch (e) {
+      console.warn('Supabase unassign instructor error', e);
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const activeSession = localStorage.getItem('dss_active_user_session');
+      if (activeSession) {
+        const parsed = JSON.parse(activeSession);
+        if (parsed.id === learnerId) {
+          const copy = { ...parsed };
+          delete copy.assignedInstructorId;
+          delete copy.assignedInstructorName;
+          localStorage.setItem('dss_active_user_session', JSON.stringify(copy));
+        }
+      }
+    } catch {}
+    window.dispatchEvent(new CustomEvent('dss-users-updated'));
+  }
+
+  return true;
+}
+
+export async function bulkAssignLearnersToInstructor(learnerIds: string[], instructorId: string): Promise<boolean> {
+  const users = getLocalUsers();
+  const instructor = users.find((u) => u.id === instructorId && u.role === 'instructor');
+  const instructorName = instructor ? instructor.name : undefined;
+  const learnerSet = new Set(learnerIds);
+
+  const updatedUsers = users.map((u) => {
+    if (learnerSet.has(u.id)) {
+      return {
+        ...u,
+        assignedInstructorId: instructorId,
+        assignedInstructorName: instructorName,
+      };
+    }
+    return u;
+  });
+
+  saveLocalUsers(updatedUsers);
+
+  if (typeof window !== 'undefined') {
+    try {
+      const activeSession = localStorage.getItem('dss_active_user_session');
+      if (activeSession) {
+        const parsed = JSON.parse(activeSession);
+        if (learnerSet.has(parsed.id)) {
+          localStorage.setItem(
+            'dss_active_user_session',
+            JSON.stringify({
+              ...parsed,
+              assignedInstructorId: instructorId,
+              assignedInstructorName: instructorName,
+            })
+          );
+        }
+      }
+    } catch {}
+    window.dispatchEvent(new CustomEvent('dss-users-updated'));
+  }
+
+  return true;
 }
 
 export async function createNewCourse(courseData: Omit<Course, 'id'>): Promise<Course> {
@@ -631,10 +789,18 @@ export async function addCourseModule(moduleData: Omit<CourseModuleItem, 'id' | 
   await addNotification({
     courseId: moduleData.courseId,
     courseTitle: courseTitle || 'Course Curriculum',
-    title: moduleData.type === 'lecture' ? 'New Recorded Lecture Uploaded' : moduleData.type === 'live' ? 'Live Interactive Class Scheduled' : 'New Module Added',
-    message: `Instructor added "${newModule.title}" to ${courseTitle || 'the course'}.`,
+    title: moduleData.type === 'lecture'
+      ? 'New Recorded Lecture Uploaded'
+      : moduleData.type === 'live'
+      ? 'Live Interactive Class Scheduled'
+      : 'New Module Added',
+    message: moduleData.instructorName
+      ? `${moduleData.instructorName} added "${newModule.title}" to ${courseTitle || 'the course'}.`
+      : `Instructor added "${newModule.title}" to ${courseTitle || 'the course'}.`,
     type: moduleData.type === 'live' ? 'live' : moduleData.type === 'notes' ? 'notes' : 'lecture',
     actionLink: `/learn/${moduleData.courseId}${tabParam}`,
+    instructorId: moduleData.instructorId,
+    instructorName: moduleData.instructorName,
   });
 
   return newModule;
@@ -693,9 +859,13 @@ export async function addCourseNote(noteData: Omit<CourseResourceNote, 'id' | 'u
     courseId: noteData.courseId,
     courseTitle: courseTitle || 'Course Curriculum',
     title: 'New Study Notes & Materials Uploaded',
-    message: `Instructor published "${newNote.title}" in ${courseTitle || 'your course'}.`,
+    message: noteData.instructorName
+      ? `${noteData.instructorName} published "${newNote.title}" in ${courseTitle || 'your course'}.`
+      : `Instructor published "${newNote.title}" in ${courseTitle || 'your course'}.`,
     type: 'notes',
     actionLink: `/learn/${noteData.courseId}?tab=notes`,
+    instructorId: noteData.instructorId,
+    instructorName: noteData.instructorName,
   });
 
   return newNote;
@@ -839,6 +1009,8 @@ export async function createLiveSession(sessionData: Omit<LiveSession, 'id' | 'c
     duration: sessionData.status === 'live' ? 'LIVE NOW' : 'SCHEDULED',
     summary: sessionData.agenda || `Live session for ${sessionData.courseTitle}`,
     scheduledTime: sessionData.scheduledTime,
+    instructorId: sessionData.instructorId,
+    instructorName: sessionData.instructorName,
   }, sessionData.courseTitle);
 
   // Automatically dispatch notification to learners
@@ -847,10 +1019,12 @@ export async function createLiveSession(sessionData: Omit<LiveSession, 'id' | 'c
     courseTitle: sessionData.courseTitle,
     title: sessionData.status === 'live' ? '🔴 Live Interactive Class Started!' : '📅 New Live Class Scheduled',
     message: sessionData.status === 'live'
-      ? `Live class "${sessionData.topic}" is in session right now. Click to join immediately!`
-      : `Live session "${sessionData.topic}" scheduled for ${sessionData.scheduledTime}.`,
+      ? `Live class "${sessionData.topic}" hosted by ${sessionData.instructorName} is in session right now. Click to join immediately!`
+      : `Live session "${sessionData.topic}" scheduled by ${sessionData.instructorName} for ${sessionData.scheduledTime}.`,
     type: 'live',
     actionLink: `/learn/${sessionData.courseId}?tab=live`,
+    instructorId: sessionData.instructorId,
+    instructorName: sessionData.instructorName,
   });
 
   return newSession;

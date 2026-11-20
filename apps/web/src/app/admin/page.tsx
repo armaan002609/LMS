@@ -14,6 +14,9 @@ import {
   createNewUser,
   createNewCourse,
   deleteUser,
+  assignLearnerToInstructor,
+  unassignLearnerFromInstructor,
+  bulkAssignLearnersToInstructor,
 } from '@/lib/store';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { UserWithCourses, Course } from '@/lib/types';
@@ -33,6 +36,7 @@ import {
   BookPlus,
   Cpu,
   Radio,
+  GraduationCap,
 } from 'lucide-react';
 import { ScheduleLiveClassModal } from '@/components/ScheduleLiveClassModal';
 
@@ -52,7 +56,15 @@ export default function AdminDashboardPage() {
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<'learner' | 'admin' | 'instructor'>('learner');
   const [newInitialCourse, setNewInitialCourse] = useState('');
+  const [newInstructorId, setNewInstructorId] = useState('');
   const [actionError, setActionError] = useState('');
+
+  // Instructor Assignment State
+  const [isAssignLearnersModalOpen, setIsAssignLearnersModalOpen] = useState(false);
+  const [selectedInstructorForModal, setSelectedInstructorForModal] = useState<string>('');
+  const [selectedLearnerIdsForModal, setSelectedLearnerIdsForModal] = useState<string[]>([]);
+  const [assigningInstructorUserId, setAssigningInstructorUserId] = useState<string | null>(null);
+  const [selectedInstructorToAssign, setSelectedInstructorToAssign] = useState<string>('');
 
   // Add Course Modal State
   const [isAddCourseOpen, setIsAddCourseOpen] = useState(false);
@@ -100,6 +112,9 @@ export default function AdminDashboardPage() {
     }
   }, [user, authLoading, router]);
 
+  const instructors = usersList.filter((u) => u.role === 'instructor');
+  const learners = usersList.filter((u) => u.role === 'learner');
+
   // Handle Add New User
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,15 +125,51 @@ export default function AdminDashboardPage() {
     }
 
     try {
-      await createNewUser(newName.trim(), newEmail.trim(), newRole, newInitialCourse || undefined);
+      await createNewUser(
+        newName.trim(),
+        newEmail.trim(),
+        newRole,
+        newInitialCourse || undefined,
+        newRole === 'learner' && newInstructorId ? newInstructorId : undefined
+      );
       setIsAddUserOpen(false);
       setNewName('');
       setNewEmail('');
       setNewInitialCourse('');
+      setNewInstructorId('');
       await loadData();
     } catch (err: any) {
       setActionError(err.message || 'Failed to create user');
     }
+  };
+
+  // Handle Assign Instructor to Learner
+  const handleAssignInstructor = async (learnerId: string, instructorId: string) => {
+    await assignLearnerToInstructor(learnerId, instructorId);
+    setAssigningInstructorUserId(null);
+    await loadData();
+  };
+
+  // Handle Unassign Instructor from Learner
+  const handleUnassignInstructor = async (learnerId: string) => {
+    await unassignLearnerFromInstructor(learnerId);
+    await loadData();
+  };
+
+  // Open Bulk Modal for an Instructor
+  const openManageInstructorModal = (instructorId: string) => {
+    setSelectedInstructorForModal(instructorId);
+    const currentlyAssigned = learners.filter((l) => l.assignedInstructorId === instructorId).map((l) => l.id);
+    setSelectedLearnerIdsForModal(currentlyAssigned);
+    setIsAssignLearnersModalOpen(true);
+  };
+
+  // Handle Save Bulk Instructor Assignment
+  const handleSaveBulkInstructorAssignment = async () => {
+    if (!selectedInstructorForModal) return;
+    await bulkAssignLearnersToInstructor(selectedLearnerIdsForModal, selectedInstructorForModal);
+    setIsAssignLearnersModalOpen(false);
+    await loadData();
   };
 
   // Handle Add New Course
@@ -271,7 +322,23 @@ export default function AdminDashboardPage() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                if (instructors.length > 0 && instructors[0]) {
+                  openManageInstructorModal(instructors[0].id);
+                } else {
+                  alert('Please create at least one Instructor identity first.');
+                }
+              }}
+              className="gap-2 bg-amber-950/40 border border-amber-900/60 text-amber-400 hover:bg-amber-950/70 font-semibold text-xs shadow-md shadow-amber-950/30"
+            >
+              <GraduationCap className="w-3.5 h-3.5 text-amber-500" />
+              <span>Assign Learners to Instructors</span>
+            </Button>
+
             <Button
               variant="secondary"
               size="sm"
@@ -384,6 +451,7 @@ export default function AdminDashboardPage() {
               >
                 <option value="ALL">All Roles</option>
                 <option value="LEARNER">Learners Only</option>
+                <option value="INSTRUCTOR">Instructors Only</option>
                 <option value="ADMIN">Admins Only</option>
               </select>
             </div>
@@ -396,6 +464,7 @@ export default function AdminDashboardPage() {
                 <tr className="border-b border-[#1E1E28] text-zinc-400 font-mono text-[10px] uppercase tracking-wider bg-[#060609]">
                   <th className="py-3 px-6">User / Operator</th>
                   <th className="py-3 px-4">Role</th>
+                  <th className="py-3 px-4">Assigned Mentor / Learners</th>
                   <th className="py-3 px-6">Assigned Courses & Work</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
@@ -403,14 +472,14 @@ export default function AdminDashboardPage() {
               <tbody className="divide-y divide-[#161620]">
                 {loading ? (
                   <tr>
-                    <td colSpan={4} className="py-12 text-center text-zinc-500 font-mono">
+                    <td colSpan={5} className="py-12 text-center text-zinc-500 font-mono">
                       <div className="w-5 h-5 border-2 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-2" />
                       Loading user authorizations...
                     </td>
                   </tr>
                 ) : filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={4} className="py-8 text-center text-zinc-500">
+                    <td colSpan={5} className="py-8 text-center text-zinc-500">
                       No users match the search criteria.
                     </td>
                   </tr>
@@ -436,11 +505,91 @@ export default function AdminDashboardPage() {
                           className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${
                             u.role === 'admin'
                               ? 'bg-red-950/60 text-red-400 border-red-900/60'
+                              : u.role === 'instructor'
+                              ? 'bg-amber-950/60 text-amber-400 border-amber-900/60'
                               : 'bg-zinc-900 text-zinc-300 border-zinc-700'
                           }`}
                         >
                           {u.role}
                         </span>
+                      </td>
+
+                      {/* Assigned Mentor / Learners */}
+                      <td className="py-4 px-4">
+                        {u.role === 'learner' ? (
+                          u.assignedInstructorId ? (
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-amber-950/40 border border-amber-900/60 text-[11px] font-semibold text-amber-300">
+                                <GraduationCap className="w-3.5 h-3.5 text-amber-500" />
+                                <span>{u.assignedInstructorName}</span>
+                              </span>
+                              <button
+                                onClick={() => handleUnassignInstructor(u.id)}
+                                title="Unassign instructor"
+                                className="text-zinc-500 hover:text-red-400 p-0.5 rounded hover:bg-zinc-800"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : assigningInstructorUserId === u.id ? (
+                            <div className="flex items-center gap-1 bg-[#161622] border border-amber-900/60 p-1 rounded-lg">
+                              <select
+                                value={selectedInstructorToAssign}
+                                onChange={(e) => {
+                                  const instId = e.target.value;
+                                  if (instId) {
+                                    handleAssignInstructor(u.id, instId);
+                                  }
+                                }}
+                                className="bg-[#09090D] border border-zinc-700 rounded px-2 py-1 text-[11px] text-white focus:outline-none"
+                              >
+                                <option value="">Select Instructor...</option>
+                                {instructors.map((inst) => (
+                                  <option key={inst.id} value={inst.id}>
+                                    {inst.name} ({inst.email})
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                onClick={() => setAssigningInstructorUserId(null)}
+                                className="text-zinc-400 hover:text-white p-0.5"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] text-zinc-500 italic">Unassigned</span>
+                              <button
+                                onClick={() => {
+                                  if (instructors.length === 0) {
+                                    alert('Please create at least one Instructor identity first.');
+                                    return;
+                                  }
+                                  setSelectedInstructorToAssign(instructors[0]?.id || '');
+                                  setAssigningInstructorUserId(u.id);
+                                }}
+                                className="text-[10px] font-mono font-bold text-amber-400 hover:text-white px-2 py-0.5 rounded bg-[#161622] border border-zinc-800 hover:border-amber-900 transition-colors"
+                              >
+                                + Assign
+                              </button>
+                            </div>
+                          )
+                        ) : u.role === 'instructor' ? (
+                          <div className="flex items-center gap-2">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-emerald-950/40 border border-emerald-900/60 text-emerald-400 font-mono text-[11px] font-bold">
+                              {learners.filter((l) => l.assignedInstructorId === u.id).length} Assigned
+                            </span>
+                            <button
+                              onClick={() => openManageInstructorModal(u.id)}
+                              className="text-[10px] font-mono text-zinc-400 hover:text-white underline"
+                            >
+                              Manage
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] font-mono text-zinc-600">—</span>
+                        )}
                       </td>
 
                       {/* Assigned Courses */}
@@ -674,6 +823,24 @@ export default function AdminDashboardPage() {
                 </select>
               </div>
 
+              {newRole === 'learner' && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-zinc-400 font-medium">Assign Dedicated Mentor / Instructor</label>
+                  <select
+                    value={newInstructorId}
+                    onChange={(e) => setNewInstructorId(e.target.value)}
+                    className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-red-600"
+                  >
+                    <option value="">-- No mentor (assign later) --</option>
+                    {instructors.map((inst) => (
+                      <option key={inst.id} value={inst.id}>
+                        {inst.name} ({inst.email})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs text-zinc-400 font-medium">Initial Course Assignment (Optional)</label>
                 <select
@@ -710,6 +877,135 @@ export default function AdminDashboardPage() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Assign Learners to Instructor Modal */}
+      {isAssignLearnersModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0B0B10] border border-[#1E1E28] rounded-2xl max-w-lg w-full p-6 shadow-2xl flex flex-col gap-5 text-white animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+              <div className="flex items-center gap-2">
+                <GraduationCap className="w-5 h-5 text-amber-500" />
+                <h3 className="text-base font-bold text-white">Assign Learners to Instructor</h3>
+              </div>
+              <button
+                onClick={() => setIsAssignLearnersModalOpen(false)}
+                className="text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-zinc-400 font-medium">Select Instructor</label>
+                <select
+                  value={selectedInstructorForModal}
+                  onChange={(e) => {
+                    const instId = e.target.value;
+                    setSelectedInstructorForModal(instId);
+                    const currentlyAssigned = learners.filter((l) => l.assignedInstructorId === instId).map((l) => l.id);
+                    setSelectedLearnerIdsForModal(currentlyAssigned);
+                  }}
+                  className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-red-600"
+                >
+                  {instructors.map((inst) => (
+                    <option key={inst.id} value={inst.id}>
+                      {inst.name} ({inst.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between text-xs pt-2 border-t border-zinc-900">
+                <span className="font-bold text-zinc-300">
+                  Select Learners to Assign ({selectedLearnerIdsForModal.length} selected)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const allLearnerIds = learners.map((l) => l.id);
+                    setSelectedLearnerIdsForModal(
+                      selectedLearnerIdsForModal.length === allLearnerIds.length ? [] : allLearnerIds
+                    );
+                  }}
+                  className="text-amber-400 hover:text-amber-300 font-mono text-[11px] underline"
+                >
+                  {selectedLearnerIdsForModal.length === learners.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+
+              <div className="max-h-60 overflow-y-auto space-y-1.5 divide-y divide-zinc-900 pr-1">
+                {learners.length === 0 ? (
+                  <p className="text-xs text-zinc-500 py-4 text-center">No learners registered yet.</p>
+                ) : (
+                  learners.map((learner) => {
+                    const isChecked = selectedLearnerIdsForModal.includes(learner.id);
+                    const isAssignedToOther = learner.assignedInstructorId && learner.assignedInstructorId !== selectedInstructorForModal;
+                    return (
+                      <label
+                        key={learner.id}
+                        className={`pt-2 flex items-center justify-between p-2 rounded-lg cursor-pointer transition-colors ${
+                          isChecked ? 'bg-[#14121E] border border-amber-900/40' : 'hover:bg-zinc-900/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedLearnerIdsForModal([...selectedLearnerIdsForModal, learner.id]);
+                              } else {
+                                setSelectedLearnerIdsForModal(selectedLearnerIdsForModal.filter((id) => id !== learner.id));
+                              }
+                            }}
+                            className="rounded bg-zinc-900 border-zinc-700 text-red-600 focus:ring-0"
+                          />
+                          <div>
+                            <span className="text-xs font-bold text-white block">{learner.name}</span>
+                            <span className="text-[10px] text-zinc-500 font-mono">{learner.email}</span>
+                          </div>
+                        </div>
+
+                        {isAssignedToOther ? (
+                          <span className="text-[10px] text-zinc-500 font-mono">
+                            Currently: {learner.assignedInstructorName}
+                          </span>
+                        ) : isChecked ? (
+                          <span className="text-[10px] text-amber-400 font-mono font-bold">
+                            Assigned
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-zinc-600 font-mono">Unassigned</span>
+                        )}
+                      </label>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-zinc-800">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsAssignLearnersModalOpen(false)}
+                className="text-xs text-zinc-400 hover:text-white"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleSaveBulkInstructorAssignment}
+                className="bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs"
+              >
+                Save Assignments
+              </Button>
+            </div>
           </div>
         </div>
       )}

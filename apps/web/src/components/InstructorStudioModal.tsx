@@ -13,6 +13,7 @@ import {
   CheckCircle,
 } from 'lucide-react';
 import { addCourseModule, addCourseNote } from '@/lib/store';
+import { useAuth } from '@/lib/auth-context';
 
 interface InstructorStudioModalProps {
   isOpen: boolean;
@@ -29,6 +30,7 @@ export function InstructorStudioModal({
   courseTitle,
   onSuccess,
 }: InstructorStudioModalProps) {
+  const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<'module' | 'live' | 'notes'>('module');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
@@ -69,6 +71,8 @@ export function InstructorStudioModal({
           duration: moduleDuration.trim() || '45 Min',
           videoUrl: moduleVideoUrl.trim() || undefined,
           summary: moduleSummary.trim() || `Instructor lecture: ${moduleTitle.trim()}`,
+          instructorId: user?.id,
+          instructorName: user?.name || 'Assigned Instructor',
         },
         courseTitle
       );
@@ -104,6 +108,8 @@ export function InstructorStudioModal({
           duration: 'LIVE',
           scheduledTime: liveDate.trim(),
           summary: liveAgenda.trim() || `Interactive stream: ${liveTopic.trim()}. Meeting link: ${liveMeetingUrl}`,
+          instructorId: user?.id,
+          instructorName: user?.name || 'Assigned Instructor',
         },
         courseTitle
       );
@@ -137,6 +143,8 @@ export function InstructorStudioModal({
           description: noteDescription.trim() || 'Official study notes and reference architecture document.',
           fileName: noteFileName.trim() || `${noteTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}.pdf`,
           fileSize: noteFileSize.trim() || '2.5 MB',
+          instructorId: user?.id,
+          instructorName: user?.name || 'Assigned Instructor',
         },
         courseTitle
       );

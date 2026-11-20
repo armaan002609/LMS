@@ -19,6 +19,8 @@ import {
   Play,
   Lock,
   Cpu,
+  GraduationCap,
+  Radio,
 } from 'lucide-react';
 
 export default function HomePage() {
@@ -144,6 +146,53 @@ export default function HomePage() {
           </div>
         </section>
 
+        {/* Dedicated Instructor & Mentor Hub */}
+        {user.assignedInstructorName ? (
+          <section className="bg-gradient-to-r from-[#12080D] via-[#0E0B14] to-[#0A0A10] border border-amber-950/60 rounded-2xl p-5 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-950/60 border border-amber-900/60 flex items-center justify-center text-amber-400 shrink-0">
+                <GraduationCap className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-[10px] font-mono uppercase bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded font-bold">
+                    Assigned Faculty Mentor
+                  </span>
+                  <span className="text-xs text-emerald-400 font-mono font-bold flex items-center gap-1">
+                    ● Active Mentor
+                  </span>
+                </div>
+                <h2 className="text-base md:text-lg font-black text-white mt-1">
+                  {user.assignedInstructorName}
+                </h2>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  Assigned by Administrator to guide your training perimeter, live classes, study notes, and hands-on lab evaluations.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              {assignedCourses.length > 0 && assignedCourses[0] && (
+                <Link href={`/learn/${assignedCourses[0].id}?tab=live`}>
+                  <Button variant="secondary" size="sm" className="bg-[#14121E] border-amber-900/50 text-amber-300 hover:text-white text-xs gap-1.5 font-bold">
+                    <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+                    <span>Enter Mentor Live Room</span>
+                  </Button>
+                </Link>
+              )}
+            </div>
+          </section>
+        ) : (
+          <div className="p-3.5 bg-[#09090E] border border-dashed border-zinc-800 rounded-xl text-xs text-zinc-400 flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <GraduationCap className="w-4 h-4 text-zinc-500 shrink-0" />
+              <span>
+                <strong>Mentor Status:</strong> No instructor assigned to your profile yet. Your security administrator will pair you with a dedicated instructor shortly.
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Live Interactive Class HUD */}
         <LiveSessionHUD />
 
@@ -209,7 +258,7 @@ export default function HomePage() {
                     </p>
 
                     {/* Metadata Specs */}
-                    <div className="flex items-center gap-4 mt-4 pt-4 border-t border-zinc-900 text-xs text-zinc-400">
+                    <div className="flex items-center gap-4 mt-4 pt-4 border-t border-zinc-900 text-xs text-zinc-400 flex-wrap">
                       <div className="flex items-center gap-1.5 font-mono">
                         <Clock className="w-3.5 h-3.5 text-red-500" />
                         <span>{course.totalHours} Hours</span>
@@ -222,6 +271,12 @@ export default function HomePage() {
                         <div className="flex items-center gap-1.5 font-mono text-emerald-400">
                           <Cpu className="w-3.5 h-3.5" />
                           <span>Lab: {course.targetLabIp}</span>
+                        </div>
+                      )}
+                      {user.assignedInstructorName && (
+                        <div className="flex items-center gap-1.5 font-mono text-amber-400">
+                          <GraduationCap className="w-3.5 h-3.5 text-amber-500" />
+                          <span>Mentor: {user.assignedInstructorName}</span>
                         </div>
                       )}
                     </div>

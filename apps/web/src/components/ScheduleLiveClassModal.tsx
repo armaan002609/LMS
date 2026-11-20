@@ -10,8 +10,9 @@ import {
   CheckCircle,
   Zap,
 } from 'lucide-react';
-import { createLiveSession, fetchCourses } from '@/lib/store';
-import { Course } from '@/lib/types';
+import { createLiveSession, fetchCourses, fetchUsersWithCourses } from '@/lib/store';
+import { Course, UserWithCourses } from '@/lib/types';
+import { useAuth } from '@/lib/auth-context';
 
 interface ScheduleLiveClassModalProps {
   isOpen: boolean;
@@ -28,7 +29,10 @@ export function ScheduleLiveClassModal({
   defaultCourseTitle,
   onSuccess,
 }: ScheduleLiveClassModalProps) {
+  const { user } = useAuth();
   const [courses, setCourses] = useState<Course[]>([]);
+  const [availableInstructors, setAvailableInstructors] = useState<UserWithCourses[]>([]);
+  const [selectedInstructorId, setSelectedInstructorId] = useState<string>('');
   const [selectedCourseId, setSelectedCourseId] = useState(defaultCourseId || '');
   const [topic, setTopic] = useState('');
   const [instructorName, setInstructorName] = useState('Senior Academy Instructor');
@@ -50,7 +54,17 @@ export function ScheduleLiveClassModal({
         setSelectedCourseId(defaultCourseId || list[0].id);
       }
     });
-  }, [defaultCourseId]);
+
+    fetchUsersWithCourses().then((users) => {
+      const insts = users.filter((u) => u.role === 'instructor');
+      setAvailableInstructors(insts);
+    });
+
+    if (user && user.role === 'instructor') {
+      setSelectedInstructorId(user.id);
+      setInstructorName(user.name);
+    }
+  }, [defaultCourseId, user]);
 
   if (!isOpen) return null;
 
@@ -98,11 +112,15 @@ export function ScheduleLiveClassModal({
         } catch {}
       }
 
+      const finalInstructorId = selectedInstructorId || (user?.role === 'instructor' ? user.id : undefined);
+      const finalInstructorName = instructorName.trim() || user?.name || 'Senior Academy Instructor';
+
       await createLiveSession({
         courseId: targetCId,
         courseTitle: cTitle,
         topic: topic.trim(),
-        instructorName: instructorName.trim() || 'Senior Academy Instructor',
+        instructorId: finalInstructorId,
+        instructorName: finalInstructorName,
         scheduledTime: scheduledTimeLabel,
         meetingUrl: meetingUrl.trim() || 'https://meet.darkspacesecurity.io/live',
         platform,
@@ -194,14 +212,37 @@ export function ScheduleLiveClassModal({
               className="bg-[#07070A] border-zinc-800 text-white text-xs"
               required
             />
-            <Input
-              label="Instructor Host Name"
-              placeholder="e.g. Senior Academy Instructor"
-              value={instructorName}
-              onChange={(e) => setInstructorName(e.target.value)}
-              className="bg-[#07070A] border-zinc-800 text-white text-xs"
-              required
-            />
+            {user?.role === 'admin' && availableInstructors.length > 0 ? (
+              <div className="flex flex-col gap-1.5">
+                <label className="text-zinc-400 font-medium text-xs">Instructor in Charge</label>
+                <select
+                  value={selectedInstructorId}
+                  onChange={(e) => {
+                    const instId = e.target.value;
+                    setSelectedInstructorId(instId);
+                    const found = availableInstructors.find((i) => i.id === instId);
+                    if (found) setInstructorName(found.name);
+                  }}
+                  className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-red-600"
+                >
+                  <option value="">Choose Instructor...</option>
+                  {availableInstructors.map((inst) => (
+                    <option key={inst.id} value={inst.id}>
+                      {inst.name} ({inst.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <Input
+                label="Instructor Host Name"
+                placeholder="e.g. Senior Academy Instructor"
+                value={instructorName}
+                onChange={(e) => setInstructorName(e.target.value)}
+                className="bg-[#07070A] border-zinc-800 text-white text-xs"
+                required
+              />
+            )}
           </div>
 
           {/* Quick Schedule Selector */}

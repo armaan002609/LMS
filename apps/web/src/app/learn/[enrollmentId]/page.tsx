@@ -1537,7 +1537,9 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     )}
 
                     <div className="flex items-center justify-between border-t border-zinc-900 pt-3 text-xs font-mono">
-                      <span className="text-zinc-500">Live Host: Senior Lead Instructor</span>
+                      <span className="text-zinc-400">
+                        Live Host: <strong className="text-white">{user?.assignedInstructorName || 'Senior Lead Instructor'}</strong>
+                      </span>
                       <button
                         type="button"
                         onClick={handleCancelWaiting}

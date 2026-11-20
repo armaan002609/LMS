@@ -7,6 +7,8 @@ export interface User {
   role: Role;
   organizationId: string;
   createdAt: string;
+  assignedInstructorId?: string;
+  assignedInstructorName?: string;
 }
 
 export interface Course {
@@ -56,6 +58,8 @@ export interface CourseModuleItem {
   scheduledTime?: string;
   isCompleted?: boolean;
   createdAt: string;
+  instructorId?: string;
+  instructorName?: string;
 }
 
 export interface CourseResourceNote {
@@ -67,6 +71,8 @@ export interface CourseResourceNote {
   fileName?: string;
   fileSize?: string;
   uploadedAt: string;
+  instructorId?: string;
+  instructorName?: string;
 }
 
 export interface AppNotification {
@@ -79,6 +85,8 @@ export interface AppNotification {
   actionLink?: string;
   createdAt: string;
   read: boolean;
+  instructorId?: string;
+  instructorName?: string;
 }
 
 export interface LiveSession {
@@ -87,6 +95,7 @@ export interface LiveSession {
   courseTitle: string;
   topic: string;
   instructorName: string;
+  instructorId?: string;
   scheduledTime: string;
   meetingUrl: string;
   platform: 'internal' | 'google-meet' | 'zoom' | 'teams' | 'custom';

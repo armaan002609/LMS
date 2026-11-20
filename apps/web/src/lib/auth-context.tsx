@@ -27,24 +27,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     // Check local storage session
-    try {
-      const stored = localStorage.getItem(AUTH_STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        // If session was from old demo learner, purge it
-        if (parsed.email === 'learner@darkspacesecurity.io' || parsed.name === 'Alex Mercer') {
-          localStorage.removeItem(AUTH_STORAGE_KEY);
-          document.cookie = 'dss_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-          setUser(null);
-        } else {
-          setUser(parsed);
+    const loadSession = () => {
+      try {
+        const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          // If session was from old demo learner, purge it
+          if (parsed.email === 'learner@darkspacesecurity.io' || parsed.name === 'Alex Mercer') {
+            localStorage.removeItem(AUTH_STORAGE_KEY);
+            document.cookie = 'dss_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+            setUser(null);
+          } else {
+            setUser(parsed);
+          }
         }
+      } catch (e) {
+        console.warn('Error reading stored session', e);
+      } finally {
+        setIsLoading(false);
       }
-    } catch (e) {
-      console.warn('Error reading stored session', e);
-    } finally {
-      setIsLoading(false);
-    }
+    };
+
+    loadSession();
+
+    const handleUsersUpdated = () => {
+      loadSession();
+    };
+
+    window.addEventListener('dss-users-updated', handleUsersUpdated);
+    window.addEventListener('storage', handleUsersUpdated);
+    return () => {
+      window.removeEventListener('dss-users-updated', handleUsersUpdated);
+      window.removeEventListener('storage', handleUsersUpdated);
+    };
   }, []);
 
   const login = async (email: string, _password?: string) => {
@@ -70,6 +85,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               role: dbUser.role as any,
               organizationId: dbUser.organization_id || 'darkspace',
               createdAt: dbUser.created_at,
+              assignedInstructorId: dbUser.assigned_instructor_id || undefined,
+              assignedInstructorName: dbUser.assigned_instructor_name || undefined,
             };
             setUser(loggedUser);
             localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(loggedUser));
@@ -93,6 +110,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: matched.role,
           organizationId: matched.organizationId,
           createdAt: matched.createdAt,
+          assignedInstructorId: matched.assignedInstructorId,
+          assignedInstructorName: matched.assignedInstructorName,
         };
         setUser(loggedUser);
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(loggedUser));

@@ -13,6 +13,7 @@ import {
   Video,
   Clock,
   Plus,
+  GraduationCap,
 } from 'lucide-react';
 
 export function LiveSessionHUD() {
@@ -46,8 +47,26 @@ export function LiveSessionHUD() {
     };
   }, []);
 
-  const liveSession = sessions.find((s) => s.status === 'live');
-  const upcomingSession = sessions.find((s) => s.status === 'upcoming');
+  const isLearnerWithMentor = Boolean(user && user.role === 'learner' && (user.assignedInstructorId || user.assignedInstructorName));
+
+  // Prioritize session created by this learner's assigned mentor if available
+  const mentorLiveSession = isLearnerWithMentor
+    ? sessions.find((s) => s.status === 'live' && ((user?.assignedInstructorId && s.instructorId === user.assignedInstructorId) || (user?.assignedInstructorName && s.instructorName === user.assignedInstructorName)))
+    : null;
+  const liveSession = mentorLiveSession || sessions.find((s) => s.status === 'live');
+
+  const mentorUpcomingSession = isLearnerWithMentor
+    ? sessions.find((s) => s.status === 'upcoming' && ((user?.assignedInstructorId && s.instructorId === user.assignedInstructorId) || (user?.assignedInstructorName && s.instructorName === user.assignedInstructorName)))
+    : null;
+  const upcomingSession = mentorUpcomingSession || sessions.find((s) => s.status === 'upcoming');
+
+  const isLiveSessionFromMentor = Boolean(
+    isLearnerWithMentor && liveSession && ((user?.assignedInstructorId && liveSession.instructorId === user.assignedInstructorId) || (user?.assignedInstructorName && liveSession.instructorName === user.assignedInstructorName))
+  );
+
+  const isUpcomingSessionFromMentor = Boolean(
+    isLearnerWithMentor && upcomingSession && ((user?.assignedInstructorId && upcomingSession.instructorId === user.assignedInstructorId) || (user?.assignedInstructorName && upcomingSession.instructorName === user.assignedInstructorName))
+  );
 
   const canManage = Boolean(user && user.role !== 'learner' && (user.role === 'admin' || user.role === 'instructor'));
 
@@ -69,6 +88,12 @@ export function LiveSessionHUD() {
                   <Radio className="w-3.5 h-3.5" />
                   <span>LIVE CLASS IN PROGRESS</span>
                 </span>
+                {isLiveSessionFromMentor && (
+                  <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 font-mono text-[10px] font-bold">
+                    <GraduationCap className="w-3.5 h-3.5" />
+                    <span>Your Assigned Mentor</span>
+                  </span>
+                )}
                 <span className="text-[10px] font-mono uppercase bg-red-950/80 text-red-400 border border-red-900/60 px-2 py-0.5 rounded font-bold">
                   {liveSession.courseTitle}
                 </span>
@@ -87,7 +112,10 @@ export function LiveSessionHUD() {
               </p>
 
               <div className="flex items-center gap-2 text-[11px] font-mono text-zinc-400 mt-1">
-                <span>Instructor: <strong className="text-white">{liveSession.instructorName}</strong></span>
+                <span>
+                  Instructor: <strong className="text-white">{liveSession.instructorName}</strong>
+                  {isLiveSessionFromMentor && <span className="text-amber-400 font-bold ml-1.5">(Your Mentor)</span>}
+                </span>
                 <span>·</span>
                 <span>Platform: <strong className="text-red-400 uppercase">{liveSession.platform}</strong></span>
               </div>
@@ -126,10 +154,16 @@ export function LiveSessionHUD() {
             </div>
 
             <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-[10px] font-mono uppercase bg-zinc-900 text-amber-400 border border-amber-900/40 px-2 py-0.5 rounded font-bold">
                   NEXT SCHEDULED LIVE CLASS
                 </span>
+                {isUpcomingSessionFromMentor && (
+                  <span className="flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/40 font-mono text-[10px] font-bold">
+                    <GraduationCap className="w-3.5 h-3.5" />
+                    <span>Your Mentor</span>
+                  </span>
+                )}
                 <span className="text-xs font-mono text-zinc-400">
                   {upcomingSession.scheduledTime}
                 </span>
@@ -140,7 +174,8 @@ export function LiveSessionHUD() {
               </h3>
 
               <p className="text-xs text-zinc-400">
-                Track: <strong className="text-zinc-200">{upcomingSession.courseTitle}</strong> · Instructor: {upcomingSession.instructorName}
+                Track: <strong className="text-zinc-200">{upcomingSession.courseTitle}</strong> · Instructor: <strong className="text-white">{upcomingSession.instructorName}</strong>
+                {isUpcomingSessionFromMentor && <span className="text-amber-400 font-bold ml-1.5">(Your Assigned Mentor)</span>}
               </p>
             </div>
           </div>
