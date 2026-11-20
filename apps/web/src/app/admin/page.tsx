@@ -55,11 +55,12 @@ export default function AdminDashboardPage() {
   // Add Course Modal State
   const [isAddCourseOpen, setIsAddCourseOpen] = useState(false);
   const [newCourseTitle, setNewCourseTitle] = useState('');
-  const [newCourseCategory, setNewCourseCategory] = useState('Offensive Security');
+  const [newCourseCategory, setNewCourseCategory] = useState('Web & Software');
   const [newCourseLevel, setNewCourseLevel] = useState<'Beginner' | 'Intermediate' | 'Advanced'>('Intermediate');
   const [newCourseSummary, setNewCourseSummary] = useState('');
   const [newCourseHours, setNewCourseHours] = useState(40);
   const [newCourseLabIp, setNewCourseLabIp] = useState('10.10.50.20');
+  const [trackCategoryFilter, setTrackCategoryFilter] = useState('ALL');
 
   // Course Assignment Quick Selector State
   const [assigningUserId, setAssigningUserId] = useState<string | null>(null);
@@ -524,16 +525,41 @@ export default function AdminDashboardPage() {
 
         {/* Catalog Course Tracks Section */}
         <section className="bg-[#0B0B10] border border-[#1E1E28] rounded-2xl p-6 flex flex-col gap-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <Shield className="w-4 h-4 text-red-500" />
               <h2 className="text-sm font-bold tracking-tight">Available Academy Tracks & Target Pods</h2>
             </div>
-            <span className="text-xs font-mono text-zinc-500">{coursesList.length} Tracks Ready</span>
+            <div className="flex items-center gap-1.5 overflow-x-auto text-xs font-mono">
+              {[
+                { id: 'ALL', label: 'All Tracks' },
+                { id: 'Web & Software', label: 'Web & Software' },
+                { id: 'Cyber Security', label: 'Cyber Security' },
+                { id: 'Data & AI', label: 'Data & AI' },
+                { id: 'Internship', label: 'Internships' },
+              ].map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setTrackCategoryFilter(cat.id)}
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] transition-all whitespace-nowrap ${
+                    trackCategoryFilter === cat.id
+                      ? 'bg-red-950/60 text-red-400 border-red-800/80 font-bold'
+                      : 'border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700 bg-[#07070A]'
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {coursesList.map((c) => (
+            {coursesList
+              .filter((c) => {
+                if (trackCategoryFilter === 'ALL') return true;
+                return c.category.toLowerCase().includes(trackCategoryFilter.toLowerCase());
+              })
+              .map((c) => (
               <div key={c.id} className="bg-[#07070A] border border-zinc-800/80 rounded-xl p-4 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mb-2">
@@ -716,12 +742,20 @@ export default function AdminDashboardPage() {
                     onChange={(e) => setNewCourseCategory(e.target.value)}
                     className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-red-600"
                   >
-                    <option value="Offensive Security">Offensive Security</option>
-                    <option value="Web Security">Web Security</option>
-                    <option value="Cloud Security">Cloud Security</option>
-                    <option value="Defensive Security">Defensive Security</option>
-                    <option value="Exploit Dev">Exploit Dev</option>
-                    <option value="AI Security">AI Security</option>
+                    <optgroup label="Core Curriculum Categories">
+                      <option value="Web & Software">Web & Software</option>
+                      <option value="Cyber Security">Cyber Security</option>
+                      <option value="Data & AI">Data & AI</option>
+                      <option value="Internship">Internship (4/8/12/24 Weeks)</option>
+                    </optgroup>
+                    <optgroup label="Specialized Security Disciplines">
+                      <option value="Offensive Security">Offensive Security</option>
+                      <option value="Web Security">Web Security</option>
+                      <option value="Cloud Security">Cloud Security</option>
+                      <option value="Defensive Security">Defensive Security</option>
+                      <option value="Exploit Dev">Exploit Dev</option>
+                      <option value="AI Security">AI Security</option>
+                    </optgroup>
                   </select>
                 </div>
 
