@@ -583,7 +583,10 @@ export async function assignLearnerToInstructor(learnerId: string, instructorId:
   const supabase = getSupabaseBrowserClient();
   if (supabase) {
     try {
-      await supabase.from('users').update({ assigned_instructor_id: instructorId }).eq('id', learnerId);
+      await supabase.from('users').update({
+        assigned_instructor_id: instructorId,
+        assigned_instructor_name: instructorName,
+      }).eq('id', learnerId);
     } catch (e) {
       console.warn('Supabase assign instructor error', e);
     }
@@ -630,7 +633,10 @@ export async function unassignLearnerFromInstructor(learnerId: string): Promise<
   const supabase = getSupabaseBrowserClient();
   if (supabase) {
     try {
-      await supabase.from('users').update({ assigned_instructor_id: null }).eq('id', learnerId);
+      await supabase.from('users').update({
+        assigned_instructor_id: null,
+        assigned_instructor_name: null,
+      }).eq('id', learnerId);
     } catch (e) {
       console.warn('Supabase unassign instructor error', e);
     }
@@ -693,11 +699,17 @@ export async function bulkAssignLearnersToInstructor(learnerIds: string[], instr
   if (supabase) {
     try {
       if (learnerIds.length > 0) {
-        await supabase.from('users').update({ assigned_instructor_id: instructorId }).in('id', learnerIds);
+        await supabase.from('users').update({
+          assigned_instructor_id: instructorId,
+          assigned_instructor_name: instructorName,
+        }).in('id', learnerIds);
       }
       const unselectedUsers = users.filter((u) => u.assignedInstructorId === instructorId && !learnerSet.has(u.id));
       if (unselectedUsers.length > 0) {
-        await supabase.from('users').update({ assigned_instructor_id: null }).in('id', unselectedUsers.map((u) => u.id));
+        await supabase.from('users').update({
+          assigned_instructor_id: null,
+          assigned_instructor_name: null,
+        }).in('id', unselectedUsers.map((u) => u.id));
       }
     } catch (e) {
       console.warn('Supabase bulk assign instructor error', e);
