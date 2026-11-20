@@ -5,8 +5,14 @@ export const metadata: Metadata = {
   title: 'DarkSpaceSecurity | LMS & Cyber Training Portal',
   description: 'Elevate your cybersecurity career with DarkSpaceSecurity. Industry-leading training in Ethical Hacking, VAPT, SOC, and AI.',
   icons: {
-    icon: '/logo-mark.png',
-    apple: '/logo-mark.png',
+    icon: [
+      { url: '/favicon.ico', sizes: 'any' },
+      { url: '/icon.png', type: 'image/png', sizes: '500x500' },
+      { url: '/favicon-red.png', type: 'image/png', sizes: '500x500' },
+    ],
+    apple: [
+      { url: '/apple-icon.png', sizes: '500x500', type: 'image/png' },
+    ],
   },
 };
 

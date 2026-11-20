@@ -12,9 +12,9 @@ export const Logo: React.FC<LogoProps> = ({
   showSubtitle = false,
 }) => {
   const iconSizes = {
-    sm: 'w-6 h-8',
-    md: 'w-7 h-9',
-    lg: 'w-10 h-13',
+    sm: 'w-7 h-7',
+    md: 'w-9 h-9',
+    lg: 'w-12 h-12',
   };
 
   const textSizes = {
@@ -25,11 +25,11 @@ export const Logo: React.FC<LogoProps> = ({
 
   return (
     <div className={`flex items-center gap-2.5 ${className}`}>
-      {/* Official Logo Mark (from uploaded asset) */}
+      {/* Official White Hacker Logo Mark */}
       <img
         src="/logo-mark.png"
         alt="DarkSpaceSecurity Logo"
-        className={`${iconSizes[size]} object-contain filter drop-shadow-[0_0_8px_rgba(255,0,0,0.45)]`}
+        className={`${iconSizes[size]} object-contain filter drop-shadow-[0_0_10px_rgba(255,0,0,0.45)]`}
       />
 
       <div className="flex flex-col">
