@@ -142,7 +142,20 @@ function RemoteVideoTile({ peer, onMuteToggle }: RemoteVideoTileProps) {
   return (
     <div className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border border-zinc-800 shadow-xl flex items-center justify-center">
       <video
-        ref={videoRef}
+        ref={(el) => {
+          videoRef.current = el;
+          if (el) {
+            el.muted = true;
+            el.defaultMuted = true;
+            el.playsInline = true;
+            el.setAttribute('playsinline', 'true');
+            el.setAttribute('webkit-playsinline', 'true');
+            if (peer.stream && el.srcObject !== peer.stream) {
+              el.srcObject = peer.stream;
+              el.play().catch(() => {});
+            }
+          }
+        }}
         autoPlay
         playsInline
         // @ts-ignore
@@ -261,6 +274,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const sbChannelRef = React.useRef<any>(null);
   const processedMessagesRef = React.useRef<Set<string>>(new Set());
   const localPeerIdRef = React.useRef<string>('');
+  const localTrackStateRef = React.useRef({ isCameraOn: false, isMicOn: false, isScreenSharing: false });
   const handlePeerMessageRef = React.useRef<((msg: any) => Promise<void>) | null>(null);
   const handleAdmissionMessageRef = React.useRef<((msg: any) => void) | null>(null);
 
@@ -329,8 +343,24 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; time: string; text: string; role?: string }>>([]);
   const [newChatInput, setNewChatInput] = useState('');
 
-  // Canonical room identifier (ensures instructor and learners always bind to the exact same room channel)
-  const canonicalRoomId = course?.id || (params.enrollmentId.startsWith('c0000000') ? params.enrollmentId : 'c0000000-0000-0000-0000-000000000101');
+  // Synchronous resolution of canonical course/room ID
+  // Ensures both Host and Learner bind to the exact same room channel from the first render
+  const resolvedCourseId = React.useMemo(() => {
+    if (course?.id) return course.id;
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem('dss_local_enrollments');
+        if (stored) {
+          const list = JSON.parse(stored);
+          const found = list.find((e: any) => e.id === params.enrollmentId);
+          if (found?.courseId) return found.courseId;
+        }
+      } catch {}
+    }
+    return params.enrollmentId || 'c0000000-0000-0000-0000-000000000101';
+  }, [course?.id, params.enrollmentId]);
+
+  const canonicalRoomId = resolvedCourseId;
 
   const loadCourseData = async () => {
     const courses = await fetchCourses();
@@ -554,6 +584,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
   }, [isScreenSharing]);
 
+  // Keep localTrackStateRef continuously in sync without triggering channel re-subscriptions
+  useEffect(() => {
+    localTrackStateRef.current = { isCameraOn, isMicOn, isScreenSharing };
+  }, [isCameraOn, isMicOn, isScreenSharing]);
+
   // Room state key for admission & waiting queue
   const roomStateKey = `dss_live_room_state_${canonicalRoomId}`;
 
@@ -714,7 +749,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             handleLeaveRoom();
             alert('The live class session was ended by the instructor.');
           })
-          .subscribe();
+          .subscribe((status: string) => {
+            if (status === 'SUBSCRIBED') {
+              if (localPeerIdRef.current) {
+                broadcastRoomMessage('peer-presence', {
+                  from: localPeerIdRef.current,
+                  userId: user?.id,
+                  name: user?.name || user?.email?.split('@')[0] || 'User',
+                  role: user?.role || 'learner',
+                  broadcast: true,
+                  isCameraOn: localTrackStateRef.current.isCameraOn,
+                  isMicOn: localTrackStateRef.current.isMicOn,
+                  isScreenSharing: localTrackStateRef.current.isScreenSharing,
+                });
+              }
+            }
+          });
       } catch (err) {
         console.warn('Supabase Realtime setup warning:', err);
       }
@@ -763,9 +813,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       targetRole: string,
       isInitiator: boolean
     ) => {
-      // If we already have an active peer connection for this targetPeerId, return it
-      if (peerConnectionsRef.current[targetPeerId]) {
-        return peerConnectionsRef.current[targetPeerId];
+      // If we already have a healthy active connection for targetPeerId, reuse it
+      const existingPc = peerConnectionsRef.current[targetPeerId];
+      if (existingPc && existingPc.connectionState !== 'failed' && existingPc.connectionState !== 'closed') {
+        return existingPc;
+      }
+      if (existingPc) {
+        try { existingPc.close(); } catch {}
+        delete peerConnectionsRef.current[targetPeerId];
       }
 
       // Purge any older connection for the same user (e.g. they refreshed their browser)
@@ -921,6 +976,8 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
       pc.onnegotiationneeded = async () => {
         try {
+          // STRICT WebRTC glare guard: Only the initiator proactively initiates negotiation!
+          if (!isInitiator) return;
           if (pc.signalingState !== 'stable') return;
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
@@ -957,19 +1014,25 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       }
 
       if (isInitiator) {
-        pc.createOffer()
-          .then((offer) => pc.setLocalDescription(offer).then(() => offer))
-          .then((offer) => {
-            broadcastRoomMessage('webrtc-offer', {
-              from: myPeerId,
-              to: targetPeerId,
-              userId: user?.id,
-              name: user?.name || user?.email?.split('@')[0] || 'User',
-              role: user?.role || 'learner',
-              sdp: offer,
-            });
-          })
-          .catch((err) => console.error('Error creating WebRTC offer:', err));
+        // Wait briefly for local tracks to attach before sending initial offer
+        setTimeout(async () => {
+          try {
+            if (pc.signalingState === 'stable' && !pc.currentLocalDescription) {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              broadcastRoomMessage('webrtc-offer', {
+                from: myPeerId,
+                to: targetPeerId,
+                userId: user?.id,
+                name: user?.name || user?.email?.split('@')[0] || 'User',
+                role: user?.role || 'learner',
+                sdp: offer,
+              });
+            }
+          } catch (err) {
+            console.error('Error creating initial WebRTC offer:', err);
+          }
+        }, 80);
       }
 
       return pc;
@@ -997,8 +1060,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
         peerUserIdMapRef.current[msg.from] = msg.userId || '';
 
+        const existingPc = peerConnectionsRef.current[msg.from];
         const isInitiator = myPeerId > msg.from;
-        setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, isInitiator);
+
+        // If no active peer connection exists, or previous one failed/closed, set it up
+        if (!existingPc || existingPc.connectionState === 'failed' || existingPc.connectionState === 'closed') {
+          setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, isInitiator);
+        }
 
         setRemotePeers((prev) => {
           // Filter out stale peers with same userId or same peerId
@@ -1027,17 +1095,9 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           ];
         });
 
-        if (msg.broadcast) {
-          broadcastRoomMessage('peer-presence', {
-            from: myPeerId,
-            userId: user?.id,
-            name: user?.name || user?.email?.split('@')[0] || 'User',
-            role: user?.role || 'learner',
-            broadcast: false,
-            isCameraOn,
-            isMicOn,
-            isScreenSharing,
-          });
+        // If newly discovered peer (we didn't have an active connection before) or broadcast requested, reply
+        if (!existingPc || msg.broadcast) {
+          announcePresence(false);
         }
       } else if (msg.type === 'track-state-changed') {
         setRemotePeers((prev) =>
@@ -1054,10 +1114,21 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         );
       } else if (msg.type === 'webrtc-offer' && msg.to === myPeerId) {
         let pc = peerConnectionsRef.current[msg.from];
-        if (!pc) {
+        if (!pc || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           pc = setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, false);
         }
         try {
+          // WebRTC Glare / collision protection:
+          // If we have an uncompleted local offer and receive an offer from remote:
+          if (pc.signalingState === 'have-local-offer') {
+            if (myPeerId < msg.from) {
+              // Yield to remote peer with higher peerId
+              await pc.setLocalDescription({ type: 'rollback' });
+            } else {
+              // Remote peer should rollback; ignore this colliding offer
+              return;
+            }
+          }
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
 
           // Flush any buffered candidates
@@ -1080,7 +1151,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
       } else if (msg.type === 'webrtc-answer' && msg.to === myPeerId) {
         const pc = peerConnectionsRef.current[msg.from];
-        if (pc) {
+        if (pc && pc.signalingState === 'have-local-offer') {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
 
@@ -1144,6 +1215,19 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
     handlePeerMessageRef.current = handlePeerMessage;
 
+    const announcePresence = (broadcast: boolean = false) => {
+      broadcastRoomMessage('peer-presence', {
+        from: myPeerId,
+        userId: user?.id,
+        name: user?.name || user?.email?.split('@')[0] || 'User',
+        role: user?.role || 'learner',
+        broadcast,
+        isCameraOn,
+        isMicOn,
+        isScreenSharing,
+      });
+    };
+
     // Synchronous unload broadcast to immediately inform peers on refresh/close
     const handleBeforeUnload = () => {
       broadcastRoomMessage('peer-leave', {
@@ -1158,34 +1242,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         unlockAudio();
-        broadcastRoomMessage('peer-presence', {
-          from: myPeerId,
-          userId: user?.id,
-          name: user?.name || user?.email?.split('@')[0] || 'User',
-          role: user?.role || 'learner',
-          broadcast: false,
-          isCameraOn,
-          isMicOn,
-          isScreenSharing,
-        });
+        announcePresence(false);
         syncLocalTracksToPeers(mediaStreamRef.current);
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Announce presence across both Supabase Realtime and local BroadcastChannel
-    broadcastRoomMessage('peer-presence', {
-      from: myPeerId,
-      userId: user?.id,
-      name: user?.name || user?.email?.split('@')[0] || 'User',
-      role: user?.role || 'learner',
-      broadcast: true,
-      isCameraOn,
-      isMicOn,
-      isScreenSharing,
-    });
+    announcePresence(true);
+
+    // Continuous presence heartbeat every 2.5 seconds to guarantee instant peer discovery across network jumps
+    const presenceHeartbeatInterval = setInterval(() => {
+      announcePresence(false);
+    }, 2500);
 
     return () => {
+      clearInterval(presenceHeartbeatInterval);
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
