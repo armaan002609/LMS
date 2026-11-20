@@ -41,9 +41,11 @@ import {
   VideoOff,
   Hand,
   Copy,
-  ExternalLink,
   PhoneOff,
   Check,
+  Monitor,
+  MonitorOff,
+  AlertCircle,
 } from 'lucide-react';
 
 export default function CoursePlayerPage({ params }: { params: { enrollmentId: string } }) {
@@ -58,10 +60,23 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const [isInstructorStudioOpen, setIsInstructorStudioOpen] = useState(false);
   const [isScheduleLiveOpen, setIsScheduleLiveOpen] = useState(false);
 
-  // Live room interactive state
+  // WebRTC Hardware Media Refs
+  const localVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const screenVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = React.useRef<MediaStream | null>(null);
+  const screenStreamRef = React.useRef<MediaStream | null>(null);
+  const audioContextRef = React.useRef<AudioContext | null>(null);
+  const analyserRef = React.useRef<AnalyserNode | null>(null);
+  const animFrameRef = React.useRef<number | null>(null);
+  const chatBottomRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Live room hardware & interactive state
   const [isInLiveRoom, setIsInLiveRoom] = useState(false);
-  const [isMicMuted, setIsMicMuted] = useState(true);
-  const [isCamOff, setIsCamOff] = useState(true);
+  const [isMicOn, setIsMicOn] = useState(false);
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [micLevel, setMicLevel] = useState(0);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
   const [isHandRaised, setIsHandRaised] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [liveSidebarTab, setLiveSidebarTab] = useState<'chat' | 'participants'>('chat');
@@ -79,13 +94,8 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const [flagInput, setFlagInput] = useState('');
   const [flagSubmitted, setFlagSubmitted] = useState(false);
 
-  // Live class chat state
-  const [chatMessages, setChatMessages] = useState<Array<{ sender: string; time: string; text: string; role?: string }>>([
-    { sender: 'Instructor (Host)', time: '18:02', text: 'Welcome team! Live broadcast is active. Feel free to ask questions in the chat.', role: 'instructor' },
-    { sender: 'Operator_91', time: '18:04', text: 'Audio and video are crystal clear.' },
-    { sender: 'Cadet_Z', time: '18:06', text: 'Are the slides uploaded under the Notes tab?' },
-    { sender: 'Instructor (Host)', time: '18:07', text: 'Yes, full architecture notes and diagrams are available under Study Notes & Files.', role: 'instructor' },
-  ]);
+  // Live class chat state (Zero demo data)
+  const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; time: string; text: string; role?: string }>>([]);
   const [newChatInput, setNewChatInput] = useState('');
 
   const loadCourseData = async () => {
@@ -160,44 +170,352 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
   };
 
+  const chatStorageKey = `dss_live_chat_${params.enrollmentId}`;
+
+  // Load chat and sync across tabs
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const stored = localStorage.getItem(chatStorageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            // Strip any legacy demo messages
+            const filtered = parsed.filter(
+              (m) => m && m.sender !== 'Operator_91' && m.sender !== 'Cadet_Z'
+            );
+            setChatMessages(filtered);
+          }
+        }
+      } catch (e) {
+        console.error('Error reading live chat:', e);
+      }
+    }
+
+    const handleChatBroadcast = (e: any) => {
+      if (e.detail?.courseId === params.enrollmentId && Array.isArray(e.detail?.messages)) {
+        setChatMessages(e.detail.messages);
+      }
+    };
+
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === chatStorageKey && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) {
+            setChatMessages(parsed);
+          }
+        } catch {}
+      }
+    };
+
+    window.addEventListener('dss-live-chat-broadcast', handleChatBroadcast);
+    window.addEventListener('storage', handleStorageChange);
+
+    return () => {
+      window.removeEventListener('dss-live-chat-broadcast', handleChatBroadcast);
+      window.removeEventListener('storage', handleStorageChange);
+    };
+  }, [params.enrollmentId, chatStorageKey]);
+
+  // Auto-scroll chat when messages update
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+
+  // Synchronize local camera video element
+  useEffect(() => {
+    if (isCameraOn && localVideoRef.current && mediaStreamRef.current) {
+      localVideoRef.current.srcObject = mediaStreamRef.current;
+      localVideoRef.current.play().catch(() => {});
+    }
+  }, [isCameraOn, isScreenSharing]);
+
+  // Synchronize screen share video element
+  useEffect(() => {
+    if (isScreenSharing && screenVideoRef.current && screenStreamRef.current) {
+      screenVideoRef.current.srcObject = screenStreamRef.current;
+      screenVideoRef.current.play().catch(() => {});
+    }
+  }, [isScreenSharing]);
+
+  // Cleanup all hardware streams on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
+        mediaStreamRef.current = null;
+      }
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((t) => t.stop());
+        screenStreamRef.current = null;
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+    };
+  }, []);
+
+  const appendChatMessage = (text: string) => {
+    const senderName: string = (user?.name || (user?.email ? user.email.split('@')[0] : '')) || 'Operator';
+    const newMsg: { id: string; sender: string; time: string; text: string; role?: string } = {
+      id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      sender: senderName,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      text,
+      role: user?.role || 'learner',
+    };
+
+    setChatMessages((prev) => {
+      const updated = [...prev, newMsg];
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(chatStorageKey, JSON.stringify(updated));
+          window.dispatchEvent(
+            new CustomEvent('dss-live-chat-broadcast', {
+              detail: { courseId: params.enrollmentId, messages: updated },
+            })
+          );
+        } catch (e) {
+          console.error('Chat storage error:', e);
+        }
+      }
+      return updated;
+    });
+  };
+
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newChatInput.trim()) return;
-    setChatMessages((prev) => [
-      ...prev,
-      {
-        sender: user?.name || 'You',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: newChatInput.trim(),
-      },
-    ]);
+    appendChatMessage(newChatInput.trim());
     setNewChatInput('');
   };
 
   const handleQuickReaction = (reaction: string) => {
-    setChatMessages((prev) => [
-      ...prev,
-      {
-        sender: user?.name || 'You',
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: reaction,
-      },
-    ]);
+    appendChatMessage(reaction);
   };
 
   const handleToggleHand = () => {
     const nextState = !isHandRaised;
     setIsHandRaised(nextState);
     if (nextState) {
-      setChatMessages((prev) => [
-        ...prev,
-        {
-          sender: user?.name || 'You',
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: '✋ Raised hand with a question for instructor.',
-        },
-      ]);
+      appendChatMessage('✋ Raised hand to ask a question.');
     }
+  };
+
+  // Hardware: WebRTC Camera Toggle
+  const toggleCamera = async () => {
+    setDeviceError(null);
+    if (isCameraOn) {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getVideoTracks().forEach((track) => {
+          track.stop();
+          mediaStreamRef.current?.removeTrack(track);
+        });
+      }
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = null;
+      }
+      setIsCameraOn(false);
+    } else {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setDeviceError('Camera access is not supported by your browser.');
+          return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        });
+        const videoTrack = stream.getVideoTracks()[0];
+        if (!mediaStreamRef.current) {
+          mediaStreamRef.current = new MediaStream();
+        }
+        if (videoTrack) {
+          mediaStreamRef.current.addTrack(videoTrack);
+          videoTrack.onended = () => {
+            setIsCameraOn(false);
+          };
+        }
+
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = mediaStreamRef.current;
+          localVideoRef.current.play().catch(() => {});
+        }
+
+        setIsCameraOn(true);
+      } catch (err: any) {
+        console.error('Camera access failed:', err);
+        setDeviceError(
+          err?.name === 'NotAllowedError'
+            ? 'Camera permission was denied. Please allow camera access in your browser address bar.'
+            : err?.message || 'Could not access camera device.'
+        );
+        setIsCameraOn(false);
+      }
+    }
+  };
+
+  // Hardware: WebRTC Microphone Toggle with Audio Context Meter
+  const toggleMic = async () => {
+    setDeviceError(null);
+    if (isMicOn) {
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach((track) => {
+          track.stop();
+          mediaStreamRef.current?.removeTrack(track);
+        });
+      }
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => {});
+        audioContextRef.current = null;
+      }
+      setMicLevel(0);
+      setIsMicOn(false);
+    } else {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setDeviceError('Microphone access is not supported by your browser.');
+          return;
+        }
+        const audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const audioTrack = audioStream.getAudioTracks()[0];
+        if (!mediaStreamRef.current) {
+          mediaStreamRef.current = new MediaStream();
+        }
+        if (audioTrack) {
+          mediaStreamRef.current.addTrack(audioTrack);
+          audioTrack.onended = () => {
+            setIsMicOn(false);
+            setMicLevel(0);
+          };
+        }
+
+        // Real-time audio frequency visualizer
+        try {
+          const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+          if (AudioContextClass) {
+            const ctx = new AudioContextClass();
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 64;
+            const source = ctx.createMediaStreamSource(audioStream);
+            source.connect(analyser);
+            audioContextRef.current = ctx;
+            analyserRef.current = analyser;
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const updateMeter = () => {
+              if (analyserRef.current) {
+                analyserRef.current.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                  sum += dataArray[i] ?? 0;
+                }
+                const avg = sum / dataArray.length;
+                setMicLevel(Math.min(100, Math.round((avg / 128) * 100)));
+                animFrameRef.current = requestAnimationFrame(updateMeter);
+              }
+            };
+            updateMeter();
+          }
+        } catch (e) {
+          console.warn('Audio visualization not available:', e);
+        }
+
+        setIsMicOn(true);
+      } catch (err: any) {
+        console.error('Microphone access failed:', err);
+        setDeviceError(
+          err?.name === 'NotAllowedError'
+            ? 'Microphone permission was denied. Please allow microphone access in your browser address bar.'
+            : err?.message || 'Could not access microphone device.'
+        );
+        setIsMicOn(false);
+      }
+    }
+  };
+
+  // Hardware: WebRTC Screen Sharing Toggle
+  const toggleScreenShare = async () => {
+    setDeviceError(null);
+    if (isScreenSharing) {
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((track) => track.stop());
+        screenStreamRef.current = null;
+      }
+      if (screenVideoRef.current) {
+        screenVideoRef.current.srcObject = null;
+      }
+      setIsScreenSharing(false);
+    } else {
+      try {
+        if (!navigator.mediaDevices?.getDisplayMedia) {
+          setDeviceError('Screen sharing is not supported by your browser.');
+          return;
+        }
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: false,
+        });
+        screenStreamRef.current = stream;
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream;
+          screenVideoRef.current.play().catch(() => {});
+        }
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          videoTrack.onended = () => {
+            if (screenStreamRef.current) {
+              screenStreamRef.current.getTracks().forEach((t) => t.stop());
+              screenStreamRef.current = null;
+            }
+            if (screenVideoRef.current) {
+              screenVideoRef.current.srcObject = null;
+            }
+            setIsScreenSharing(false);
+          };
+        }
+        setIsScreenSharing(true);
+      } catch (err: any) {
+        if (err?.name !== 'NotAllowedError') {
+          console.error('Screen sharing error:', err);
+          setDeviceError(err?.message || 'Unable to share screen.');
+        }
+        setIsScreenSharing(false);
+      }
+    }
+  };
+
+  const handleLeaveRoom = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    setIsCameraOn(false);
+    setIsMicOn(false);
+    setIsScreenSharing(false);
+    setMicLevel(0);
+    setIsInLiveRoom(false);
   };
 
   const handleCopyMeetingLink = () => {
@@ -598,7 +916,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             </div>
           )}
 
-          {/* TAB 2: LIVE INTERACTIVE CLASS & USER-FRIENDLY STUDIO */}
+          {/* TAB 2: LIVE INTERACTIVE CLASS & WEBRTC IN-APP STUDIO */}
           {activeTab === 'live' && (
             <div className="flex-1 flex flex-col md:flex-row h-full">
               <div className="flex-1 p-6 md:p-8 flex flex-col gap-4">
@@ -606,93 +924,207 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                 {isInLiveRoom ? (
                   <div className="relative aspect-video w-full bg-[#020204] border-2 border-red-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group">
                     {/* Top Room Banner */}
-                    <div className="p-4 flex items-center justify-between z-10 bg-gradient-to-b from-black/90 to-transparent">
+                    <div className="p-4 flex items-center justify-between z-20 bg-gradient-to-b from-black/90 to-transparent">
                       <div className="flex items-center gap-2">
                         <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
                           <Radio className="w-3.5 h-3.5" />
-                          <span>LIVE STREAM BROADCAST</span>
+                          <span>LIVE STUDIO BROADCAST</span>
                         </span>
-                        <span className="text-[11px] font-bold text-white hidden sm:inline">
-                          {courseTitle} — Masterclass
+                        <span className="text-[11px] font-bold text-white hidden sm:inline truncate max-w-xs">
+                          {courseTitle}
                         </span>
                       </div>
 
                       <div className="flex items-center gap-2 text-xs font-mono text-zinc-300">
                         <span className="px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-900/60 text-[10px] font-bold flex items-center gap-1">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                          CONNECTED (24ms)
+                          CONNECTED
                         </span>
+                        {isMicOn && (
+                          <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 border border-red-900/60 text-[10px] font-bold flex items-center gap-1">
+                            <Mic className="w-3 h-3 text-red-400 animate-pulse" />
+                            <span>MIC ({micLevel}%)</span>
+                          </span>
+                        )}
                         <span className="text-zinc-400 flex items-center gap-1">
                           <Users className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>42 in Room</span>
+                          <span>Cohort Live</span>
                         </span>
                       </div>
                     </div>
 
-                    {/* Active Stream Stage Screen (Simulation of screen share / camera) */}
-                    <div className="flex-1 flex flex-col items-center justify-center p-6 text-center relative">
-                      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(220,38,38,0.1),rgba(0,0,0,0.92))] flex flex-col items-center justify-center p-8">
-                        {/* Instructor Presentation HUD */}
-                        <div className="w-full max-w-xl bg-[#09090F]/90 border border-zinc-800 rounded-xl p-5 shadow-2xl text-left flex flex-col gap-3 backdrop-blur-md">
-                          <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-                            <span className="text-[10px] font-mono uppercase text-red-400 font-bold flex items-center gap-1.5">
-                              <Radio className="w-3 h-3 text-red-500 animate-pulse" />
-                              <span>INSTRUCTOR PRESENTATION SCREEN · 1080p 60FPS</span>
-                            </span>
-                            <span className="text-[10px] font-mono text-zinc-500">Audio: HD Stereo</span>
+                    {/* Center Video & Stage Viewport */}
+                    <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black">
+                      {/* View 1: Screen Share is Active */}
+                      {isScreenSharing ? (
+                        <div className="w-full h-full relative flex items-center justify-center bg-black">
+                          <video
+                            ref={screenVideoRef}
+                            autoPlay
+                            playsInline
+                            className="w-full h-full object-contain"
+                          />
+                          <div className="absolute top-4 left-4 z-10 px-3 py-1 rounded-lg bg-black/80 border border-red-500/80 text-red-400 text-xs font-mono flex items-center gap-2 backdrop-blur-md">
+                            <Monitor className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+                            <span>Presenting Screen (Live)</span>
                           </div>
 
-                          <div className="font-mono text-xs text-zinc-300 space-y-1">
-                            <p className="text-emerald-400 font-bold">// Live Code Architecture &amp; System Demo</p>
-                            <p className="text-zinc-400">&gt; Target Node: <strong className="text-white">{targetIp}</strong></p>
-                            <p className="text-zinc-400">&gt; Session: <span className="text-red-400 font-semibold">{courseTitle}</span></p>
-                            <p className="text-zinc-500 text-[11px] pt-1">
-                              Instructor is currently presenting slides and demonstrating real-time configuration.
-                            </p>
+                          {/* PiP Camera overlay if camera is also on */}
+                          {isCameraOn && (
+                            <div className="absolute bottom-4 right-4 z-20 w-44 h-28 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black">
+                              <video
+                                ref={localVideoRef}
+                                autoPlay
+                                playsInline
+                                muted
+                                className="w-full h-full object-cover scale-x-[-1]"
+                              />
+                              <span className="absolute bottom-1 right-2 text-[9px] font-mono font-bold bg-black/80 px-1.5 py-0.5 rounded text-white">
+                                You
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ) : isCameraOn ? (
+                        /* View 2: Camera Feed is Active (Fullscreen) */
+                        <div className="w-full h-full relative flex items-center justify-center bg-black">
+                          <video
+                            ref={localVideoRef}
+                            autoPlay
+                            playsInline
+                            muted
+                            className="w-full h-full object-cover scale-x-[-1]"
+                          />
+                          <div className="absolute top-4 left-4 z-10 px-3 py-1 rounded-lg bg-black/80 border border-emerald-500/80 text-emerald-400 text-xs font-mono flex items-center gap-2 backdrop-blur-md">
+                            <Video className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                            <span>Live Camera Active (HD)</span>
                           </div>
                         </div>
+                      ) : (
+                        /* View 3: Classroom Stage Waiting Hub */
+                        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(220,38,38,0.12),rgba(0,0,0,0.95))] flex flex-col items-center justify-center p-6 text-center">
+                          <div className="w-full max-w-xl bg-[#09090F]/90 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-left flex flex-col gap-3 backdrop-blur-md">
+                            <div className="flex items-center justify-between border-b border-zinc-800 pb-2.5">
+                              <span className="text-[11px] font-mono uppercase text-red-400 font-bold flex items-center gap-2">
+                                <Radio className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+                                <span>DARK SPACE LIVE CLASSROOM STUDIO</span>
+                              </span>
+                              <span className="text-[10px] font-mono text-emerald-400 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> WebRTC Stream Ready
+                              </span>
+                            </div>
 
-                        {/* Hand Raised Banner */}
-                        {isHandRaised && (
-                          <div className="mt-4 px-3 py-1.5 rounded-full bg-amber-950/80 border border-amber-800/80 text-amber-300 text-xs font-mono flex items-center gap-2 animate-bounce">
-                            <Hand className="w-3.5 h-3.5 text-amber-400" />
-                            <span>Your hand is raised! Instructor has been alerted.</span>
+                            <div className="font-mono text-xs text-zinc-300 space-y-1.5">
+                              <p className="text-emerald-400 font-bold">// Session: {courseTitle}</p>
+                              <p className="text-zinc-400">&gt; Target Node: <strong className="text-white">{targetIp}</strong></p>
+                              <p className="text-zinc-400">&gt; User: <span className="text-white font-semibold">{user?.name || user?.email || 'Operator'}</span> ({user?.role?.toUpperCase() || 'LEARNER'})</p>
+                            </div>
+
+                            <div className="mt-2 p-3 rounded-xl bg-[#06060A] border border-zinc-800/80 flex flex-col gap-2">
+                              <span className="text-[11px] text-zinc-400 font-mono">Stream Hardware Controls:</span>
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={toggleMic}
+                                  className={`p-2 rounded-lg border text-xs font-mono flex items-center justify-center gap-1.5 transition-all ${
+                                    isMicOn ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
+                                  }`}
+                                >
+                                  {isMicOn ? <Mic className="w-3.5 h-3.5 text-emerald-400" /> : <MicOff className="w-3.5 h-3.5" />}
+                                  <span>{isMicOn ? `Mic ON (${micLevel}%)` : 'Enable Mic'}</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={toggleCamera}
+                                  className={`p-2 rounded-lg border text-xs font-mono flex items-center justify-center gap-1.5 transition-all ${
+                                    isCameraOn ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300' : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white'
+                                  }`}
+                                >
+                                  {isCameraOn ? <Video className="w-3.5 h-3.5 text-emerald-400" /> : <VideoOff className="w-3.5 h-3.5" />}
+                                  <span>{isCameraOn ? 'Camera ON' : 'Turn on Camera'}</span>
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={toggleScreenShare}
+                                  className="p-2 rounded-lg border bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white text-xs font-mono flex items-center justify-center gap-1.5 transition-all hover:border-red-600"
+                                >
+                                  <Monitor className="w-3.5 h-3.5 text-red-400" />
+                                  <span>Share Screen</span>
+                                </button>
+                              </div>
+                            </div>
                           </div>
-                        )}
-                      </div>
+
+                          {/* Device Error Alert */}
+                          {deviceError && (
+                            <div className="mt-3 px-4 py-2 rounded-xl bg-red-950/90 border border-red-800 text-red-200 text-xs font-mono flex items-center gap-2 max-w-md animate-in fade-in">
+                              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                              <span>{deviceError}</span>
+                            </div>
+                          )}
+
+                          {/* Hand Raised Alert */}
+                          {isHandRaised && (
+                            <div className="mt-3 px-3 py-1.5 rounded-full bg-amber-950/80 border border-amber-800/80 text-amber-300 text-xs font-mono flex items-center gap-2 animate-bounce">
+                              <Hand className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Hand is raised! Instructor notified.</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Interactive Bottom Control Bar */}
-                    <div className="relative z-10 p-4 bg-gradient-to-t from-black/95 to-transparent flex items-center justify-between">
-                      <div className="flex items-center gap-2">
+                    <div className="relative z-20 p-4 bg-gradient-to-t from-black/95 to-transparent flex items-center justify-between">
+                      <div className="flex items-center gap-2 flex-wrap">
                         {/* Mic Button */}
                         <button
-                          onClick={() => setIsMicMuted(!isMicMuted)}
+                          type="button"
+                          onClick={toggleMic}
                           className={`p-2.5 rounded-full border transition-all ${
-                            isMicMuted
-                              ? 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
-                              : 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
+                            isMicOn
+                              ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
                           }`}
-                          title={isMicMuted ? 'Unmute Mic' : 'Mute Mic'}
+                          title={isMicOn ? 'Mute Mic' : 'Unmute Mic'}
                         >
-                          {isMicMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                          {isMicOn ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
                         </button>
 
                         {/* Camera Button */}
                         <button
-                          onClick={() => setIsCamOff(!isCamOff)}
+                          type="button"
+                          onClick={toggleCamera}
                           className={`p-2.5 rounded-full border transition-all ${
-                            isCamOff
-                              ? 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
-                              : 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
+                            isCameraOn
+                              ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
                           }`}
-                          title={isCamOff ? 'Turn on Camera' : 'Turn off Camera'}
+                          title={isCameraOn ? 'Turn off Camera' : 'Turn on Camera'}
                         >
-                          {isCamOff ? <VideoOff className="w-4 h-4" /> : <Video className="w-4 h-4" />}
+                          {isCameraOn ? <Video className="w-4 h-4" /> : <VideoOff className="w-4 h-4" />}
+                        </button>
+
+                        {/* Screen Share Button */}
+                        <button
+                          type="button"
+                          onClick={toggleScreenShare}
+                          className={`px-3 py-2 rounded-full border text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
+                            isScreenSharing
+                              ? 'bg-red-600 border-red-500 text-white shadow-md shadow-red-950'
+                              : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:text-white hover:border-red-600'
+                          }`}
+                          title={isScreenSharing ? 'Stop Screen Sharing' : 'Share Screen (Display)'}
+                        >
+                          {isScreenSharing ? <MonitorOff className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5 text-red-500" />}
+                          <span>{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
                         </button>
 
                         {/* Raise Hand Button */}
                         <button
+                          type="button"
                           onClick={handleToggleHand}
                           className={`px-3 py-2 rounded-full border text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
                             isHandRaised
@@ -706,9 +1138,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         </button>
                       </div>
 
-                      {/* Right controls: Share link, external meet, leave */}
+                      {/* Right controls: Share link, leave */}
                       <div className="flex items-center gap-2">
                         <button
+                          type="button"
                           onClick={handleCopyMeetingLink}
                           className="px-2.5 py-1.5 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5"
                           title="Copy Classroom Room Link"
@@ -717,25 +1150,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           <span>{copiedLink ? 'Copied' : 'Share'}</span>
                         </button>
 
-                        <a
-                          href="https://meet.google.com/dss-live-class"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hidden sm:inline-flex"
-                        >
-                          <button
-                            className="px-2.5 py-1.5 rounded-lg bg-[#0E0E18] border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1"
-                            title="Open Google Meet Backup"
-                          >
-                            <span>Google Meet</span>
-                            <ExternalLink className="w-3 h-3 text-red-400" />
-                          </button>
-                        </a>
-
                         {/* Leave Room Button */}
                         <button
-                          onClick={() => setIsInLiveRoom(false)}
-                          className="px-3 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1 shadow-md shadow-red-950"
+                          type="button"
+                          onClick={handleLeaveRoom}
+                          className="px-3.5 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-red-950 transition-all"
                           title="Leave Live Studio"
                         >
                           <PhoneOff className="w-3.5 h-3.5" />
@@ -754,7 +1173,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       </span>
                       <span className="text-xs font-mono text-zinc-300 flex items-center gap-1.5">
                         <Users className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>42 Operators Attending</span>
+                        <span>Classroom Ready</span>
                       </span>
                     </div>
 
@@ -764,7 +1183,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       </div>
                       <h3 className="text-base font-bold text-white">Live Cohort Session in Progress</h3>
                       <p className="text-xs text-zinc-400 mt-1 max-w-md">
-                        Instructor is broadcasting live for <strong>{courseTitle}</strong>. Join the interactive voice/video room with 1 click.
+                        Live studio is active for <strong>{courseTitle}</strong>. Join the interactive voice, video, screen share, and chat room with 1 click.
                       </p>
                       <Button
                         variant="primary"
@@ -778,8 +1197,8 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     </div>
 
                     <div className="p-4 bg-gradient-to-t from-black/90 to-transparent text-xs font-mono text-zinc-400 flex items-center justify-between">
-                      <span>Host: Senior Lead Instructor (Dark Space Academy)</span>
-                      <span className="text-emerald-400">Latency: 24ms (HD 1080p 60fps)</span>
+                      <span>Host: Senior Lead Instructor</span>
+                      <span className="text-emerald-400">In-App Live Studio (Zero External Apps)</span>
                     </div>
                   </div>
                 )}
@@ -798,6 +1217,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       ].map((item) => (
                         <button
                           key={item.label}
+                          type="button"
                           onClick={() => handleQuickReaction(`${item.emoji} ${item.label}`)}
                           className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-red-600 hover:bg-zinc-800 text-xs font-mono flex items-center gap-1 transition-all"
                         >
@@ -813,7 +1233,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                 <div className="bg-[#0B0B10] border border-[#1E1E28] rounded-xl p-4 flex items-center justify-between text-xs">
                   <div>
                     <span className="font-bold text-white block">Scheduled Live Sessions &amp; Cohort Reviews</span>
-                    <span className="text-zinc-400 text-[11px]">{courseTitle} Q&amp;A &amp; System Architecture Review · Tomorrow at 18:00 IST</span>
+                    <span className="text-zinc-400 text-[11px]">{courseTitle} Q&amp;A &amp; System Architecture Review</span>
                   </div>
                   {isInstructorOrAdmin && (
                     <Button
@@ -830,11 +1250,12 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
               {/* Live Classroom Chat & Participants Sidebar */}
               <div className="w-full md:w-80 border-l border-zinc-800/80 bg-[#08080C] flex flex-col justify-between p-4">
-                <div>
+                <div className="flex-1 flex flex-col min-h-0">
                   {/* Tab Selector between Chat and Participants */}
-                  <div className="pb-3 border-b border-zinc-800 flex items-center justify-between">
+                  <div className="pb-3 border-b border-zinc-800 flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-3 text-xs font-mono">
                       <button
+                        type="button"
                         onClick={() => setLiveSidebarTab('chat')}
                         className={`pb-1 border-b-2 font-bold transition-all ${
                           liveSidebarTab === 'chat'
@@ -845,6 +1266,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         Live Chat
                       </button>
                       <button
+                        type="button"
                         onClick={() => setLiveSidebarTab('participants')}
                         className={`pb-1 border-b-2 font-bold transition-all flex items-center gap-1 ${
                           liveSidebarTab === 'participants'
@@ -852,7 +1274,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                             : 'border-transparent text-zinc-500 hover:text-white'
                         }`}
                       >
-                        <span>Operators (42)</span>
+                        <span>Operators ({chatMessages.length > 0 ? 2 : 1})</span>
                       </button>
                     </div>
 
@@ -861,66 +1283,78 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
                   {/* TAB A: LIVE CHAT */}
                   {liveSidebarTab === 'chat' ? (
-                    <div className="py-4 space-y-3 overflow-y-auto max-h-[380px]">
-                      {chatMessages.map((msg, i) => (
-                        <div key={i} className="text-xs flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5 font-mono">
-                            <span className={`font-bold ${msg.role === 'instructor' ? 'text-red-400' : 'text-zinc-300'}`}>
-                              {msg.sender}
-                            </span>
-                            <span className="text-[10px] text-zinc-600">{msg.time}</span>
-                          </div>
-                          <p className="text-zinc-300 bg-[#0D0D14] p-2 rounded-lg border border-zinc-900 leading-snug">
-                            {msg.text}
-                          </p>
+                    <div className="py-4 space-y-3 overflow-y-auto max-h-[380px] flex-1">
+                      {chatMessages.length === 0 ? (
+                        <div className="py-12 px-4 text-center text-zinc-500 font-mono text-xs flex flex-col items-center gap-2">
+                          <Radio className="w-6 h-6 text-zinc-600 animate-pulse" />
+                          <span>Live classroom chat connected.</span>
+                          <span className="text-[11px] text-zinc-600">Send a question or reaction to start the discussion!</span>
                         </div>
-                      ))}
+                      ) : (
+                        chatMessages.map((msg) => (
+                          <div key={msg.id} className="text-xs flex flex-col gap-0.5">
+                            <div className="flex items-center gap-1.5 font-mono">
+                              <span className={`font-bold ${msg.role === 'instructor' || msg.role === 'admin' ? 'text-red-400' : 'text-zinc-300'}`}>
+                                {msg.sender}
+                              </span>
+                              {(msg.role === 'instructor' || msg.role === 'admin') && (
+                                <span className="text-[9px] bg-red-950 text-red-400 px-1 rounded border border-red-900/60 font-mono font-bold">
+                                  HOST
+                                </span>
+                              )}
+                              <span className="text-[10px] text-zinc-600">{msg.time}</span>
+                            </div>
+                            <p className="text-zinc-300 bg-[#0D0D14] p-2.5 rounded-lg border border-zinc-900 leading-snug break-words">
+                              {msg.text}
+                            </p>
+                          </div>
+                        ))
+                      )}
+                      <div ref={chatBottomRef} />
                     </div>
                   ) : (
-                    /* TAB B: ACTIVE PARTICIPANTS */
+                    /* TAB B: ACTIVE PARTICIPANTS (ZERO DEMO NAMES) */
                     <div className="py-4 space-y-2 overflow-y-auto max-h-[380px] text-xs font-mono">
-                      <div className="p-2 rounded-lg bg-red-950/30 border border-red-900/40 flex items-center justify-between">
+                      {/* Host */}
+                      <div className="p-2.5 rounded-lg bg-red-950/30 border border-red-900/40 flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <div className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center text-[10px] font-bold text-white">
                             I
                           </div>
                           <div>
-                            <span className="font-bold text-red-400 block">Instructor (Host)</span>
-                            <span className="text-[10px] text-zinc-500">Speaking</span>
+                            <span className="font-bold text-red-400 block">Lead Instructor (Host)</span>
+                            <span className="text-[10px] text-zinc-500">Course Mentor</span>
                           </div>
                         </div>
-                        <span className="text-[10px] text-emerald-400">● Mic ON</span>
+                        <span className="text-[10px] text-emerald-400 font-bold">● Online</span>
                       </div>
 
-                      <div className="p-2 rounded-lg bg-zinc-900/40 border border-zinc-800 flex items-center justify-between">
+                      {/* Current User */}
+                      <div className="p-2.5 rounded-lg bg-[#0F0F1A] border border-zinc-800 flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-300">
-                            {user?.name?.charAt(0) || 'Y'}
+                          <div className="w-6 h-6 rounded-full bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-200">
+                            {(user?.name || user?.email || 'Y').charAt(0).toUpperCase()}
                           </div>
                           <div>
-                            <span className="font-bold text-white block">{user?.name || 'You'}</span>
-                            <span className="text-[10px] text-zinc-500">Operator</span>
+                            <span className="font-bold text-white block">{user?.name || user?.email || 'You'}</span>
+                            <span className="text-[10px] text-zinc-500 capitalize">{user?.role || 'Learner'} (You)</span>
                           </div>
                         </div>
-                        <span className="text-[10px] text-zinc-500">Muted</span>
+                        <div className="flex items-center gap-1.5 text-[10px]">
+                          {isMicOn ? (
+                            <span className="text-emerald-400 flex items-center gap-0.5"><Mic className="w-3 h-3" /> ON</span>
+                          ) : (
+                            <span className="text-zinc-500">Muted</span>
+                          )}
+                          {isCameraOn && <span className="text-emerald-400 ml-1"><Video className="w-3 h-3" /></span>}
+                          {isScreenSharing && <span className="text-red-400 ml-1"><Monitor className="w-3 h-3" /></span>}
+                        </div>
                       </div>
-
-                      {['Operator_91', 'Cadet_Z', 'Dev_Lead', 'Security_Cadet', 'Arch_Master'].map((name) => (
-                        <div key={name} className="p-2 rounded-lg bg-[#07070A] border border-zinc-900 flex items-center justify-between text-zinc-400">
-                          <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-zinc-900 flex items-center justify-center text-[10px] font-bold text-zinc-500">
-                              {name.charAt(0)}
-                            </div>
-                            <span>{name}</span>
-                          </div>
-                          <span className="text-[10px] text-zinc-600">Attending</span>
-                        </div>
-                      ))}
                     </div>
                   )}
                 </div>
 
-                <form onSubmit={handleSendChat} className="pt-3 border-t border-zinc-800 flex items-center gap-2">
+                <form onSubmit={handleSendChat} className="pt-3 border-t border-zinc-800 flex items-center gap-2 shrink-0">
                   <input
                     type="text"
                     value={newChatInput}

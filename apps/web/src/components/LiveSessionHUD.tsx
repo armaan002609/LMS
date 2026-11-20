@@ -12,7 +12,6 @@ import {
   Users,
   Video,
   Clock,
-  ExternalLink,
   Plus,
 } from 'lucide-react';
 
@@ -67,7 +66,7 @@ export function LiveSessionHUD() {
                 </span>
                 <span className="text-xs font-mono text-emerald-400 flex items-center gap-1">
                   <Users className="w-3.5 h-3.5" />
-                  <span>{liveSession.attendeeCount || 42} Operators Attending</span>
+                  <span>{liveSession.attendeeCount ? `${liveSession.attendeeCount} Attending` : 'Cohort Active'}</span>
                 </span>
               </div>
 
@@ -86,7 +85,7 @@ export function LiveSessionHUD() {
               </div>
             </div>
 
-            {/* User Friendly 1-Click Join Actions */}
+            {/* User Friendly 1-Click Join Action */}
             <div className="flex flex-col sm:flex-row md:flex-col gap-2.5 shrink-0">
               <Link href={`/learn/${liveSession.courseId}?tab=live`} className="w-full">
                 <Button
@@ -98,24 +97,6 @@ export function LiveSessionHUD() {
                   <span>Join Live Class (1-Click) →</span>
                 </Button>
               </Link>
-
-              {liveSession.meetingUrl && liveSession.meetingUrl.startsWith('http') && (
-                <a
-                  href={liveSession.meetingUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full"
-                >
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="w-full bg-[#0E0E18] border-zinc-800 text-zinc-300 hover:text-white text-xs gap-1.5"
-                  >
-                    <span>Open in External Window</span>
-                    <ExternalLink className="w-3 h-3 text-red-400" />
-                  </Button>
-                </a>
-              )}
 
               {canManage && (
                 <button

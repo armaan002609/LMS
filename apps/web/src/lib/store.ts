@@ -575,41 +575,8 @@ const LOCAL_STORAGE_KEY_MODULES = 'dss_course_modules_v1';
 const LOCAL_STORAGE_KEY_NOTES = 'dss_course_notes_v1';
 const LOCAL_STORAGE_KEY_NOTIFICATIONS = 'dss_app_notifications_v1';
 
-export const INITIAL_NOTIFICATIONS: AppNotification[] = [
-  {
-    id: 'notif-1',
-    courseId: 'c0000000-0000-0000-0000-000000000101',
-    courseTitle: 'Full Stack Development',
-    title: 'New Recorded Lecture Available',
-    message: 'Instructor uploaded "Next.js 14 Server Actions & Microservices Architecture" (45 Min).',
-    type: 'lecture',
-    actionLink: '/learn/full-stack-development',
-    createdAt: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
-    read: false,
-  },
-  {
-    id: 'notif-2',
-    courseId: 'c0000000-0000-0000-0000-000000000101',
-    courseTitle: 'Full Stack Development',
-    title: 'Live Interactive Class Scheduled',
-    message: 'Live interactive class scheduled for Tomorrow at 6:00 PM IST with Q&A and code review.',
-    type: 'live',
-    actionLink: '/learn/full-stack-development',
-    createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-    read: false,
-  },
-  {
-    id: 'notif-3',
-    courseId: 'c0000000-0000-0000-0000-000000000101',
-    courseTitle: 'Full Stack Development',
-    title: 'New Study Notes & Cheatsheet Uploaded',
-    message: 'Instructor published "Full Stack Architecture Blueprint & Docker Cheatsheet.pdf".',
-    type: 'notes',
-    actionLink: '/learn/full-stack-development',
-    createdAt: new Date(Date.now() - 1000 * 60 * 300).toISOString(),
-    read: false,
-  },
-];
+// ZERO demo notifications
+export const INITIAL_NOTIFICATIONS: AppNotification[] = [];
 
 // 1. Fetch Course Modules
 export async function fetchCourseModules(courseId: string, courseTitle = '', category = ''): Promise<CourseModuleItem[]> {
@@ -742,7 +709,12 @@ export async function fetchNotifications(): Promise<AppNotification[]> {
       localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify(INITIAL_NOTIFICATIONS));
       return INITIAL_NOTIFICATIONS;
     }
-    return JSON.parse(stored);
+    const parsed: AppNotification[] = JSON.parse(stored);
+    const cleaned = parsed.filter((n) => n.id !== 'notif-1' && n.id !== 'notif-2' && n.id !== 'notif-3');
+    if (cleaned.length !== parsed.length) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify(cleaned));
+    }
+    return cleaned;
   } catch {
     return INITIAL_NOTIFICATIONS;
   }
@@ -815,36 +787,8 @@ export async function clearAllNotifications(): Promise<void> {
 
 const LOCAL_STORAGE_KEY_LIVE_SESSIONS = 'dss_live_sessions_v1';
 
-export const INITIAL_LIVE_SESSIONS: LiveSession[] = [
-  {
-    id: 'live-session-1',
-    courseId: 'c0000000-0000-0000-0000-000000000101',
-    courseTitle: 'Full Stack Development',
-    topic: 'Next.js 14 Server Actions, Microservices Architecture & Production Deployments',
-    instructorName: 'Chief Technology Instructor (Dark Space)',
-    scheduledTime: 'LIVE NOW',
-    meetingUrl: 'https://meet.darkspacesecurity.io/session-mern-alpha',
-    platform: 'internal',
-    status: 'live',
-    attendeeCount: 42,
-    agenda: 'Hands-on code review of production API gateway, Redis caching layer, and Next.js SSR hydration.',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'live-session-2',
-    courseId: 'c0000000-0000-0000-0000-000000000201',
-    courseTitle: 'Cyber Security',
-    topic: 'Adversary Emulation: Active Directory Kerberoasting & SIEM Detection',
-    instructorName: 'Senior Red Team Lead',
-    scheduledTime: 'Tomorrow at 18:00 IST',
-    meetingUrl: 'https://meet.darkspacesecurity.io/session-cyber-sec',
-    platform: 'internal',
-    status: 'upcoming',
-    attendeeCount: 65,
-    agenda: 'Live demonstration of Kerberos ticket extraction, hashcat cracking, and Defender evasion.',
-    createdAt: new Date().toISOString(),
-  },
-];
+// ZERO demo live sessions
+export const INITIAL_LIVE_SESSIONS: LiveSession[] = [];
 
 export async function fetchLiveSessions(courseId?: string): Promise<LiveSession[]> {
   if (typeof window === 'undefined') {
@@ -858,7 +802,11 @@ export async function fetchLiveSessions(courseId?: string): Promise<LiveSession[
       return courseId ? INITIAL_LIVE_SESSIONS.filter((s) => s.courseId === courseId || s.courseTitle.toLowerCase().includes(courseId.toLowerCase())) : INITIAL_LIVE_SESSIONS;
     }
     const list: LiveSession[] = JSON.parse(stored);
-    return courseId ? list.filter((s) => s.courseId === courseId || s.courseTitle.toLowerCase().includes(courseId.toLowerCase())) : list;
+    const cleaned = list.filter((s) => s.id !== 'live-session-1' && s.id !== 'live-session-2');
+    if (cleaned.length !== list.length) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS, JSON.stringify(cleaned));
+    }
+    return courseId ? cleaned.filter((s) => s.courseId === courseId || s.courseTitle.toLowerCase().includes(courseId.toLowerCase())) : cleaned;
   } catch {
     return INITIAL_LIVE_SESSIONS;
   }

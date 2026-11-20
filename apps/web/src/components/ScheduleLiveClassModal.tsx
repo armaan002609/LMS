@@ -34,7 +34,7 @@ export function ScheduleLiveClassModal({
   const [instructorName, setInstructorName] = useState('Senior Academy Instructor');
   const [scheduleType, setScheduleType] = useState<'instant' | 'today_evening' | 'tomorrow' | 'custom'>('instant');
   const [customDateTime, setCustomDateTime] = useState('');
-  const [platform, setPlatform] = useState<'internal' | 'google-meet' | 'zoom' | 'custom'>('internal');
+  const [platform, setPlatform] = useState<'internal' | 'custom'>('internal');
   const [meetingUrl, setMeetingUrl] = useState('https://meet.darkspacesecurity.io/session-live');
   const [agenda, setAgenda] = useState('');
   const [notifyLearners, setNotifyLearners] = useState(true);
@@ -260,27 +260,23 @@ export function ScheduleLiveClassModal({
           {/* Platform & Meeting Link */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <label className="text-zinc-400 font-medium">Meeting Platform</label>
+              <label className="text-zinc-400 font-medium">Broadcast Platform</label>
               <select
                 value={platform}
                 onChange={(e) => {
                   const p = e.target.value as any;
                   setPlatform(p);
                   if (p === 'internal') setMeetingUrl('https://meet.darkspacesecurity.io/session-live');
-                  else if (p === 'google-meet') setMeetingUrl('https://meet.google.com/dss-live-class');
-                  else if (p === 'zoom') setMeetingUrl('https://zoom.us/j/9928347102');
                 }}
                 className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-white text-xs focus:outline-none focus:border-red-600"
               >
-                <option value="internal">Dark Space In-App Video Studio (Recommended)</option>
-                <option value="google-meet">Google Meet (External)</option>
-                <option value="zoom">Zoom (External)</option>
-                <option value="custom">Custom WebRTC / RTMP Stream</option>
+                <option value="internal">Dark Space In-App Live Studio (Native WebRTC)</option>
+                <option value="custom">Custom WebRTC / In-App Stream</option>
               </select>
             </div>
 
             <Input
-              label="Meeting / Stream URL"
+              label="Live Studio Room Key"
               value={meetingUrl}
               onChange={(e) => setMeetingUrl(e.target.value)}
               className="bg-[#07070A] border-zinc-800 text-white text-xs"
