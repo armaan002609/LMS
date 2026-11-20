@@ -40,3 +40,44 @@ export interface UserWithCourses extends User {
     assignedAt: string;
   }>;
 }
+
+export type ModuleType = 'lecture' | 'live' | 'lab' | 'notes';
+
+export interface CourseModuleItem {
+  id: string;
+  courseId: string;
+  title: string;
+  type: ModuleType;
+  duration?: string;
+  summary: string;
+  videoUrl?: string;
+  notesContent?: string;
+  fileAttachment?: string;
+  scheduledTime?: string;
+  isCompleted?: boolean;
+  createdAt: string;
+}
+
+export interface CourseResourceNote {
+  id: string;
+  courseId: string;
+  title: string;
+  description: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileSize?: string;
+  uploadedAt: string;
+}
+
+export interface AppNotification {
+  id: string;
+  courseId: string;
+  courseTitle: string;
+  title: string;
+  message: string;
+  type: 'lecture' | 'live' | 'notes' | 'module';
+  actionLink?: string;
+  createdAt: string;
+  read: boolean;
+}
+

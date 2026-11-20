@@ -5,10 +5,17 @@ import Link from 'next/link';
 import { Button } from '@lms/ui';
 import { Logo } from '@/components/Logo';
 import { useAuth } from '@/lib/auth-context';
-import { fetchCourses, updateCourseProgress } from '@/lib/store';
-import { Course } from '@/lib/types';
 import {
-  PlayCircle,
+  fetchCourses,
+  fetchCourseModules,
+  fetchCourseNotes,
+  updateCourseProgress,
+} from '@/lib/store';
+import { Course, CourseModuleItem, CourseResourceNote } from '@/lib/types';
+import { getCourseLabTemplate, CourseLabTemplate } from '@/lib/course-content';
+import { NotificationCenter } from '@/components/NotificationCenter';
+import { InstructorStudioModal } from '@/components/InstructorStudioModal';
+import {
   CheckCircle,
   ArrowLeft,
   FileCode,
@@ -16,7 +23,6 @@ import {
   Flag,
   Clock,
   Send,
-  ShieldAlert,
   Terminal as TerminalIcon,
   Video,
   Radio,
@@ -26,93 +32,103 @@ import {
   Volume2,
   Play,
   Pause,
+  FileText,
+  Upload,
+  Plus,
+  Sparkles,
 } from 'lucide-react';
 
 export default function CoursePlayerPage({ params }: { params: { enrollmentId: string } }) {
   const { user } = useAuth();
   const [course, setCourse] = useState<Course | null>(null);
-  const [activeTab, setActiveTab] = useState<'lecture' | 'live' | 'guide' | 'terminal' | 'flags'>('lecture');
-  const [flagInput, setFlagInput] = useState('');
-  const [flagSubmitted, setFlagSubmitted] = useState(false);
+  const [template, setTemplate] = useState<CourseLabTemplate | null>(null);
+  const [courseModules, setCourseModules] = useState<CourseModuleItem[]>([]);
+  const [courseNotes, setCourseNotes] = useState<CourseResourceNote[]>([]);
+  const [activeTab, setActiveTab] = useState<'lecture' | 'live' | 'guide' | 'terminal' | 'notes' | 'flags'>('guide');
+
+  // Instructor studio state
+  const [isInstructorStudioOpen, setIsInstructorStudioOpen] = useState(false);
 
   // Video Player state
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState('1x');
-  const [videoProgress, setVideoProgress] = useState(38); // 38% watched
+  const [videoProgress, setVideoProgress] = useState(38);
+
+  // Terminal state
+  const [terminalHistory, setTerminalHistory] = useState<string[]>([]);
+  const [terminalCommand, setTerminalCommand] = useState('');
+
+  // Flag & Progress state
+  const [flagInput, setFlagInput] = useState('');
+  const [flagSubmitted, setFlagSubmitted] = useState(false);
 
   // Live class chat state
   const [chatMessages, setChatMessages] = useState<Array<{ sender: string; time: string; text: string; role?: string }>>([
-    { sender: 'Instructor', time: '18:02', text: 'Welcome team! Today we are demonstrating Spring Boot Actuator exploit chains.', role: 'instructor' },
-    { sender: 'Operator_91', time: '18:04', text: 'Target host is reachable over VPN gateway 10.10.14.82.' },
+    { sender: 'Instructor', time: '18:02', text: 'Welcome team! Session is live. Please ensure your environment is initialized.', role: 'instructor' },
+    { sender: 'Operator_91', time: '18:04', text: 'Target host is reachable over gateway.' },
     { sender: 'Cadet_Z', time: '18:06', text: 'Will this recording be uploaded after the stream?' },
-    { sender: 'Instructor', time: '18:07', text: 'Yes, full 4K recorded lectures are archived immediately under the Lecture tab.', role: 'instructor' },
+    { sender: 'Instructor', time: '18:07', text: 'Yes, full recorded lectures are archived immediately under the Lecture tab.', role: 'instructor' },
   ]);
   const [newChatInput, setNewChatInput] = useState('');
 
-  // Terminal state
-  const [terminalHistory, setTerminalHistory] = useState<string[]>([
-    'kali@darkspace-lab:~$ nmap -sC -sV -p 80,8080 10.10.11.45',
-    'PORT     STATE SERVICE VERSION',
-    '80/tcp   open  http    Apache httpd 2.4.52 ((Ubuntu))',
-    '8080/tcp open  http    Spring Boot Actuator (vulnerability CVE-2024-XXXX)',
-    'kali@darkspace-lab:~$ _'
-  ]);
-  const [terminalCommand, setTerminalCommand] = useState('');
+  const loadCourseData = async () => {
+    const courses = await fetchCourses();
+    const matched = courses.find((c) => c.id === params.enrollmentId || c.slug === params.enrollmentId) || courses[0];
+    if (matched) {
+      setCourse(matched);
+      const tmpl = getCourseLabTemplate(matched.title, matched.category, matched.targetLabIp);
+      setTemplate(tmpl);
+      setTerminalHistory(tmpl.terminalInitialHistory);
+
+      const [mods, notes] = await Promise.all([
+        fetchCourseModules(matched.id, matched.title, matched.category),
+        fetchCourseNotes(matched.id, matched.title, matched.category),
+      ]);
+      setCourseModules(mods);
+      setCourseNotes(notes);
+    }
+  };
 
   useEffect(() => {
-    fetchCourses().then((courses) => {
-      const matched = courses.find((c) => c.id === params.enrollmentId || c.slug === params.enrollmentId) || courses[0];
-      if (matched) {
-        setCourse(matched);
-        if (matched.targetLabIp) {
-          setTerminalHistory([
-            `kali@darkspace-lab:~$ nmap -sC -sV ${matched.targetLabIp}`,
-            'PORT     STATE SERVICE VERSION',
-            `80/tcp   open  http    Apache httpd 2.4.52 on ${matched.targetLabIp}`,
-            '8080/tcp open  http    Spring Boot Actuator (Exploitable Target Range)',
-            'kali@darkspace-lab:~$ _'
-          ]);
-        }
-      }
-    });
+    loadCourseData();
   }, [params.enrollmentId]);
 
   const handleCommandSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!terminalCommand.trim()) return;
+    if (!terminalCommand.trim() || !template) return;
 
     let response = '';
     const cmd = terminalCommand.trim().toLowerCase();
-    const targetIp = course?.targetLabIp || '10.10.11.45';
+    const targetIp = course?.targetLabIp || template.defaultHostIp;
 
     if (cmd === 'help') {
-      response = 'Available commands: nmap, curl, sqlmap, whoami, ifconfig, cat user.txt, clear';
+      response = 'Available commands: curl, docker, npm, nmap, python3, whoami, ifconfig, cat user.txt, clear';
     } else if (cmd.includes('cat user.txt') || cmd.includes('flag')) {
       response = 'DSS{burp_repeater_sqli_byp4ss_9912}';
     } else if (cmd === 'whoami') {
-      response = 'www-data (uid=33, gid=33) on ' + targetIp;
-    } else if (cmd === 'ifconfig') {
-      response = 'tun0: inet 10.10.14.82 netmask 255.255.254.0 (Dark Space Secure Tunnel)';
+      response = `${template.terminalUser} (uid=1000, gid=1000) on ${template.terminalHostname}`;
+    } else if (cmd === 'ifconfig' || cmd === 'ip a') {
+      response = `tun0: inet 10.10.14.82 netmask 255.255.254.0 (Dark Space Secure Tunnel)`;
     } else if (cmd === 'clear') {
-      setTerminalHistory(['kali@darkspace-lab:~$ _']);
+      setTerminalHistory([`${template.terminalUser}@${template.terminalHostname}:~$ _`]);
       setTerminalCommand('');
       return;
     } else {
-      response = `[+] Executed: ${cmd}\n[*] Target ${targetIp} responded 200 OK (Exploit Payload Staged)`;
+      response = `[+] Executed: ${cmd}\n[*] Target ${targetIp} responded 200 OK (Telemetry active)`;
     }
 
     setTerminalHistory((prev) => [
       ...prev.slice(0, -1),
-      `kali@darkspace-lab:~$ ${terminalCommand}`,
+      `${template.terminalUser}@${template.terminalHostname}:~$ ${terminalCommand}`,
       response,
-      'kali@darkspace-lab:~$ _'
+      `${template.terminalUser}@${template.terminalHostname}:~$ _`,
     ]);
     setTerminalCommand('');
   };
 
   const handleFlagSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (flagInput.trim().toUpperCase().includes('DSS{') || flagInput.length > 5) {
+    if (flagInput.trim().toUpperCase().includes('DSS{') || flagInput.length > 4) {
       setFlagSubmitted(true);
       if (user && course) {
         await updateCourseProgress(user.id, course.id, 100);
@@ -134,8 +150,9 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     setNewChatInput('');
   };
 
-  const courseTitle = course?.title || 'Cyber Security Specialist';
-  const targetIp = course?.targetLabIp || '10.10.11.45';
+  const courseTitle = course?.title || 'Full Stack Development';
+  const targetIp = course?.targetLabIp || template?.defaultHostIp || '10.10.15.50';
+  const currentTemplate = template || getCourseLabTemplate(courseTitle, course?.category || 'Web & Software', targetIp);
 
   return (
     <div className="min-h-screen flex flex-col bg-[#050508] text-[var(--color-text)] font-sans">
@@ -154,21 +171,35 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             <div className="border-l border-zinc-800 pl-3">
               <h1 className="text-sm font-bold text-white flex items-center gap-2">
                 <span>{courseTitle}</span>
-                <span className="text-[10px] bg-red-950 text-red-400 border border-red-900/40 px-2 py-0.5 rounded font-mono">
-                  {course?.category || 'Academy Track'}
+                <span className="text-[10px] bg-red-950 text-red-400 border border-red-900/40 px-2 py-0.5 rounded font-mono font-bold">
+                  {course?.category || 'Web & Software'}
                 </span>
               </h1>
               <p className="text-[11px] text-zinc-400 font-mono flex items-center gap-2">
                 <span>Target Host: <strong className="text-emerald-400">{targetIp}</strong></span>
                 <span>·</span>
-                <span>Attack Pod: <strong className="text-zinc-300">10.10.14.82</strong></span>
+                <span>{currentTemplate.devOrAttackPodLabel}: <strong className="text-zinc-300">{currentTemplate.attackPodOrCluster}</strong></span>
               </p>
             </div>
           </div>
         </div>
 
-        {/* Live Lab Controls */}
+        {/* Live Lab Controls, Instructor Studio & Notifications */}
         <div className="flex items-center gap-3 text-xs font-mono">
+          {/* Notification Center */}
+          <NotificationCenter />
+
+          {/* Instructor Studio Button */}
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => setIsInstructorStudioOpen(true)}
+            className="bg-[#12121E] border-red-900/50 text-red-400 hover:bg-red-950/40 text-xs gap-1.5 font-semibold"
+          >
+            <Upload className="w-3.5 h-3.5 text-red-400" />
+            <span>Instructor Studio</span>
+          </Button>
+
           <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0E0E16] border border-zinc-800 text-zinc-300">
             <Clock className="w-3.5 h-3.5 text-amber-500" />
             <span>01:42:15 remaining</span>
@@ -178,7 +209,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             variant="secondary"
             size="sm"
             className="bg-[#0E0E16] border-zinc-800 text-zinc-300 hover:text-white text-xs gap-1.5"
-            onClick={() => alert('Virtual machine target reset initiated for ' + targetIp)}
+            onClick={() => alert(`Environment reset initiated for ${targetIp}`)}
           >
             <RotateCcw className="w-3.5 h-3.5 text-zinc-400" />
             <span className="hidden sm:inline">Reset Lab</span>
@@ -210,81 +241,78 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           </div>
 
           <div className="flex flex-col gap-2 font-mono text-xs">
-            {/* Module 1: Lecture */}
-            <button
-              onClick={() => setActiveTab('lecture')}
-              className={`p-3 rounded-lg border text-left flex items-center justify-between transition-all ${
-                activeTab === 'lecture'
-                  ? 'bg-[#141422] border-red-600/80 text-white shadow-sm shadow-red-950/30'
-                  : 'bg-[#0A0A10] border-zinc-800/80 text-zinc-300 hover:border-zinc-700'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <Video className="w-4 h-4 text-red-500 shrink-0" />
-                <span className="truncate">1. Recorded Lecture</span>
-              </div>
-              <span className="text-[10px] text-zinc-400">45 Min</span>
-            </button>
+            {courseModules.map((mod, idx) => {
+              const isSelected =
+                (mod.type === 'lecture' && activeTab === 'lecture') ||
+                (mod.type === 'live' && activeTab === 'live') ||
+                (mod.type === 'lab' && (activeTab === 'guide' || activeTab === 'terminal')) ||
+                (mod.type === 'notes' && activeTab === 'notes');
 
-            {/* Module 2: Live Class */}
-            <button
-              onClick={() => setActiveTab('live')}
-              className={`p-3 rounded-lg border text-left flex items-center justify-between transition-all ${
-                activeTab === 'live'
-                  ? 'bg-[#141422] border-red-600/80 text-white shadow-sm shadow-red-950/30'
-                  : 'bg-[#0A0A10] border-zinc-800/80 text-zinc-300 hover:border-zinc-700'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <Radio className="w-4 h-4 text-red-500 animate-pulse shrink-0" />
-                <span className="truncate">2. Live Interactive Class</span>
-              </div>
-              <span className="text-[10px] text-red-400 font-bold">LIVE</span>
-            </button>
+              const getModIcon = () => {
+                switch (mod.type) {
+                  case 'lecture':
+                    return <Video className="w-4 h-4 text-red-500 shrink-0" />;
+                  case 'live':
+                    return <Radio className="w-4 h-4 text-red-400 animate-pulse shrink-0" />;
+                  case 'notes':
+                    return <FileText className="w-4 h-4 text-amber-400 shrink-0" />;
+                  default:
+                    return <FileCode className="w-4 h-4 text-emerald-400 shrink-0" />;
+                }
+              };
 
-            {/* Module 3: Hands-on Lab */}
-            <button
-              onClick={() => setActiveTab('terminal')}
-              className={`p-3 rounded-lg border text-left flex items-center justify-between transition-all ${
-                activeTab === 'terminal' || activeTab === 'guide'
-                  ? 'bg-[#141422] border-red-600/80 text-white shadow-sm shadow-red-950/30'
-                  : 'bg-[#0A0A10] border-zinc-800/80 text-zinc-300 hover:border-zinc-700'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <PlayCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span className="truncate">3. Kali Virtual Attack Lab</span>
-              </div>
-              <span className="text-[10px] text-emerald-400 font-bold">+100 pts</span>
-            </button>
+              return (
+                <button
+                  key={mod.id || idx}
+                  onClick={() => {
+                    if (mod.type === 'lecture') setActiveTab('lecture');
+                    else if (mod.type === 'live') setActiveTab('live');
+                    else if (mod.type === 'notes') setActiveTab('notes');
+                    else setActiveTab('guide');
+                  }}
+                  className={`p-3 rounded-lg border text-left flex items-center justify-between transition-all ${
+                    isSelected
+                      ? 'bg-[#141422] border-red-600/80 text-white shadow-sm shadow-red-950/30'
+                      : 'bg-[#0A0A10] border-zinc-800/80 text-zinc-300 hover:border-zinc-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    {getModIcon()}
+                    <span className="truncate">{mod.title}</span>
+                  </div>
+                  <span className={`text-[10px] font-bold shrink-0 ml-1.5 ${mod.duration === 'LIVE' ? 'text-red-400' : 'text-zinc-400'}`}>
+                    {mod.duration || '40 Min'}
+                  </span>
+                </button>
+              );
+            })}
 
-            {/* Module 4: Flag Submission */}
+            {/* Quick Upload Button for Instructors */}
             <button
-              onClick={() => setActiveTab('flags')}
-              className={`p-3 rounded-lg border text-left flex items-center justify-between transition-all ${
-                activeTab === 'flags'
-                  ? 'bg-[#141422] border-red-600/80 text-white shadow-sm shadow-red-950/30'
-                  : 'bg-[#0A0A10] border-zinc-800/80 text-zinc-300 hover:border-zinc-700'
-              }`}
+              onClick={() => setIsInstructorStudioOpen(true)}
+              className="mt-2 p-2.5 rounded-lg border border-dashed border-red-900/60 bg-red-950/20 hover:bg-red-950/40 text-red-400 text-xs font-mono flex items-center justify-center gap-1.5 transition-all"
             >
-              <div className="flex items-center gap-2">
-                <Flag className="w-4 h-4 text-amber-500 shrink-0" />
-                <span className="truncate">4. Proof Flag Submission</span>
-              </div>
-              <span className="text-[10px] text-amber-400 font-bold">CTF</span>
+              <Plus className="w-3.5 h-3.5" />
+              <span>+ Add Module or Notes</span>
             </button>
           </div>
 
-          <div className="mt-auto p-3 rounded-lg border border-red-950/60 bg-red-950/20 text-[11px] text-red-300 flex items-start gap-2">
-            <ShieldAlert className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-            <p>Target machine {targetIp} is completely isolated. Automated telemetry tracks lecture completion and lab flags.</p>
+          {/* Isolated Box Notification Reminder */}
+          <div className="mt-auto p-3.5 rounded-xl bg-[#0B0B14] border border-zinc-800 text-xs text-zinc-400 flex flex-col gap-2">
+            <span className="text-white font-bold flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-red-500" />
+              <span>Instructor Updates</span>
+            </span>
+            <p className="text-[11px] leading-relaxed text-zinc-500">
+              Target machine is running live. Any newly scheduled lectures, notes, or lab guides will generate automated learner alerts.
+            </p>
           </div>
         </aside>
 
-        {/* Right Main Viewer */}
+        {/* Right Active Lab / Classroom View */}
         <main className="flex-1 flex flex-col bg-[#050508] overflow-y-auto">
-          {/* Navigation Bar between Modes */}
-          <div className="flex items-center gap-2 border-b border-zinc-800/80 px-6 pt-3 bg-[#08080C] text-xs font-semibold overflow-x-auto">
+          {/* Main Tab Navigation */}
+          <div className="flex items-center gap-2 border-b border-zinc-800/80 px-6 pt-3 bg-[#08080C] text-xs font-mono overflow-x-auto">
             <button
               onClick={() => setActiveTab('lecture')}
               className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -330,7 +358,21 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               }`}
             >
               <TerminalIcon className="w-4 h-4" />
-              <span>Web Kali Terminal</span>
+              <span>
+                {currentTemplate.terminalHostname === 'darkspace-lab' ? 'Web Kali Terminal' : 'Cloud Dev Terminal'}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('notes')}
+              className={`pb-3 px-3 border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+                activeTab === 'notes'
+                  ? 'border-red-500 text-white font-bold'
+                  : 'border-transparent text-zinc-400 hover:text-white'
+              }`}
+            >
+              <FileText className="w-4 h-4" />
+              <span>Study Notes & Files</span>
             </button>
 
             <button
@@ -346,12 +388,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             </button>
           </div>
 
-          {/* TAB 1: RECORDED LECTURE (VIDEO PLAYER) */}
+          {/* TAB 1: RECORDED LECTURE */}
           {activeTab === 'lecture' && (
             <div className="p-6 md:p-8 flex flex-col gap-6 max-w-5xl mx-auto w-full">
-              {/* Cinema Cyber Video Player */}
               <div className="relative aspect-video w-full bg-[#020204] border border-[#1E1E28] rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group">
-                {/* Background Poster Simulation */}
                 <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(220,38,38,0.15),rgba(0,0,0,0.95))] flex items-center justify-center">
                   <div className="text-center p-6 flex flex-col items-center gap-3">
                     <button
@@ -366,7 +406,6 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                   </div>
                 </div>
 
-                {/* Video Top Overlay */}
                 <div className="relative z-10 p-4 bg-gradient-to-b from-black/80 to-transparent flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded bg-red-950/80 text-red-400 border border-red-900/60 text-[10px] font-mono font-bold uppercase">
@@ -377,9 +416,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                   <span className="text-[11px] font-mono text-zinc-400">Auto-Resume Active</span>
                 </div>
 
-                {/* Video Player Controls Bar */}
                 <div className="relative z-10 p-4 bg-gradient-to-t from-black/90 to-transparent flex flex-col gap-2">
-                  {/* Progress scrubber */}
                   <div
                     onClick={(e) => {
                       const rect = e.currentTarget.getBoundingClientRect();
@@ -404,7 +441,6 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     </div>
 
                     <div className="flex items-center gap-3">
-                      {/* Speed selector */}
                       <div className="flex items-center gap-1 bg-zinc-900/80 px-2 py-0.5 rounded border border-zinc-800">
                         {['1x', '1.25x', '1.5x', '2x'].map((s) => (
                           <button
@@ -428,62 +464,52 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               {/* Lecture Description & Resources */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="md:col-span-2 flex flex-col gap-3">
-                  <h2 className="text-xl font-bold text-white">Lecture Overview: Core Concepts & Live Exploit Setup</h2>
+                  <h2 className="text-xl font-bold text-white">Lecture Overview: Core Architecture & Hands-on Implementation</h2>
                   <p className="text-xs text-zinc-400 leading-relaxed">
-                    In this session, our senior instructors break down offensive attack vectors, network service enumeration, and automated vulnerability scanning. Follow along with your assigned target machine in the Kali Terminal tab.
+                    In this session, senior instructors guide you through the fundamental building blocks of {courseTitle}.
+                    Follow along with your live container cluster in the Terminal tab and review the reference guide.
                   </p>
 
                   <div className="p-4 bg-[#0B0B12] border border-zinc-800 rounded-xl mt-2 flex flex-col gap-2">
                     <span className="text-xs font-bold text-white font-mono uppercase text-red-400">Chapters:</span>
                     <ul className="text-xs space-y-1.5 font-mono text-zinc-300">
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400">
-                        <span>00:00 — Introduction & Lab Architecture</span>
+                        <span>00:00 — Introduction & Enterprise Architecture</span>
                         <span className="text-zinc-500">08:15</span>
                       </li>
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400 text-red-400">
-                        <span>08:15 — Hands-on Nmap Service Probing</span>
+                        <span>08:15 — Practical Setup & Environment Initialization</span>
                         <span className="text-zinc-500">18:42</span>
                       </li>
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400">
-                        <span>18:42 — Exploiting Misconfigured Actuators</span>
+                        <span>18:42 — Core Engineering Patterns & Execution</span>
                         <span className="text-zinc-500">32:10</span>
                       </li>
                       <li className="flex items-center justify-between cursor-pointer hover:text-red-400">
-                        <span>32:10 — Privilege Escalation to Root Flag</span>
+                        <span>32:10 — Production Deployment & Code Checkpoint</span>
                         <span className="text-zinc-500">48:50</span>
                       </li>
                     </ul>
                   </div>
                 </div>
 
-                {/* Downloadable Resources */}
+                {/* Quick Materials */}
                 <div className="bg-[#0B0B10] border border-[#1E1E28] rounded-xl p-5 flex flex-col gap-3">
                   <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
                     <Download className="w-4 h-4 text-red-500" />
                     <span>Lecture Materials</span>
                   </h3>
                   <div className="flex flex-col gap-2 text-xs">
-                    <button
-                      onClick={() => alert('Downloading official lecture slide deck')}
-                      className="p-2.5 rounded-lg bg-[#07070A] border border-zinc-800 hover:border-zinc-700 text-left flex items-center justify-between text-zinc-300"
-                    >
-                      <span>Presentation Slides (PDF)</span>
-                      <Download className="w-3.5 h-3.5 text-red-400" />
-                    </button>
-                    <button
-                      onClick={() => alert('Downloading vulnerability cheat sheet')}
-                      className="p-2.5 rounded-lg bg-[#07070A] border border-zinc-800 hover:border-zinc-700 text-left flex items-center justify-between text-zinc-300"
-                    >
-                      <span>Command Cheat Sheet</span>
-                      <Download className="w-3.5 h-3.5 text-red-400" />
-                    </button>
-                    <button
-                      onClick={() => alert('Downloading source code repository')}
-                      className="p-2.5 rounded-lg bg-[#07070A] border border-zinc-800 hover:border-zinc-700 text-left flex items-center justify-between text-zinc-300"
-                    >
-                      <span>Sample Exploit Scripts (.py)</span>
-                      <Download className="w-3.5 h-3.5 text-red-400" />
-                    </button>
+                    {courseNotes.slice(0, 3).map((note) => (
+                      <div
+                        key={note.id}
+                        onClick={() => setActiveTab('notes')}
+                        className="p-2.5 rounded-lg bg-[#07070A] border border-zinc-800 hover:border-zinc-700 cursor-pointer flex items-center justify-between text-zinc-300"
+                      >
+                        <span className="truncate">{note.fileName || note.title}</span>
+                        <Download className="w-3.5 h-3.5 text-red-400 shrink-0 ml-2" />
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>
@@ -493,10 +519,8 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           {/* TAB 2: LIVE INTERACTIVE CLASS */}
           {activeTab === 'live' && (
             <div className="flex-1 flex flex-col md:flex-row h-full">
-              {/* Live Video Broadcast Stream */}
               <div className="flex-1 p-6 md:p-8 flex flex-col gap-4">
                 <div className="relative aspect-video w-full bg-[#020204] border border-red-950/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between">
-                  {/* Live Badge */}
                   <div className="p-4 flex items-center justify-between z-10 bg-gradient-to-b from-black/80 to-transparent">
                     <span className="flex items-center gap-2 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
                       <Radio className="w-3.5 h-3.5" />
@@ -504,23 +528,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     </span>
                     <span className="text-xs font-mono text-zinc-300 flex items-center gap-1.5">
                       <Users className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>42 Operators Attending</span>
+                      <span>38 Operators Attending</span>
                     </span>
                   </div>
 
-                  {/* Instructor Live Frame Simulation */}
                   <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
                     <div className="w-16 h-16 rounded-full bg-red-950/80 border border-red-800 flex items-center justify-center text-red-400 mb-3">
                       <Radio className="w-8 h-8 animate-ping" />
                     </div>
                     <h3 className="text-base font-bold text-white">Live Cohort Session in Progress</h3>
                     <p className="text-xs text-zinc-400 mt-1 max-w-md">
-                      Instructor is sharing live screen for <strong>{courseTitle}</strong>. Join the interactive voice/video room below.
+                      Instructor is broadcasting live for <strong>{courseTitle}</strong>. Join the interactive voice/video room below.
                     </p>
                     <Button
                       variant="primary"
                       size="md"
-                      onClick={() => alert('Launching interactive WebRTC / Zoom Live Classroom...')}
+                      onClick={() => alert(`Launching interactive Live Classroom for ${courseTitle}...`)}
                       className="mt-4 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 font-bold text-xs gap-2 shadow-lg shadow-red-950/50"
                     >
                       <Radio className="w-4 h-4" />
@@ -528,9 +551,8 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     </Button>
                   </div>
 
-                  {/* Bottom stream telemetry */}
                   <div className="p-4 bg-gradient-to-t from-black/90 to-transparent text-xs font-mono text-zinc-400 flex items-center justify-between">
-                    <span>Host: Senior Security Architect (DarkSpace Red Team)</span>
+                    <span>Host: Senior Lead Instructor (Dark Space Academy)</span>
                     <span className="text-emerald-400">Latency: 28ms (HD 1080p 60fps)</span>
                   </div>
                 </div>
@@ -538,15 +560,20 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                 <div className="bg-[#0B0B10] border border-[#1E1E28] rounded-xl p-4 flex items-center justify-between text-xs">
                   <div>
                     <span className="font-bold text-white block">Next Scheduled Live Session</span>
-                    <span className="text-zinc-400 text-[11px]">Advanced Buffer Overflow & Kernel Exploitation · Tomorrow at 14:00 UTC</span>
+                    <span className="text-zinc-400 text-[11px]">{courseTitle} Q&amp;A &amp; System Architecture Review · Tomorrow at 18:00 IST</span>
                   </div>
-                  <Button variant="secondary" size="sm" className="bg-[#12121A] text-xs">
-                    Add to Calendar
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setIsInstructorStudioOpen(true)}
+                    className="bg-[#12121A] text-xs text-red-400 border-zinc-800"
+                  >
+                    Manage Schedule
                   </Button>
                 </div>
               </div>
 
-              {/* Live Classroom Q&A Chat Sidebar */}
+              {/* Live Classroom Chat */}
               <div className="w-full md:w-80 border-l border-zinc-800/80 bg-[#08080C] flex flex-col justify-between p-4">
                 <div>
                   <div className="pb-3 border-b border-zinc-800 flex items-center justify-between">
@@ -587,41 +614,31 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             </div>
           )}
 
-          {/* TAB 3: LAB GUIDE & WALKTHROUGH */}
+          {/* TAB 3: DYNAMIC LAB GUIDE (TAILORED TO THE COURSE) */}
           {activeTab === 'guide' && (
             <div className="p-8 max-w-3xl flex flex-col gap-6 text-sm text-zinc-300 leading-relaxed">
               <div>
                 <h2 className="text-xl font-bold text-white mb-2">
-                  Objective: Vulnerability Reconnaissance & Exploitation
+                  Objective: {currentTemplate.objectiveTitle}
                 </h2>
                 <p className="text-xs text-zinc-400 font-mono">
                   Assigned Track: <strong className="text-red-400">{courseTitle}</strong> · Target IP: <strong className="text-emerald-400">{targetIp}</strong>
                 </p>
               </div>
 
-              <div className="bg-[#0B0B12] border border-zinc-800/80 rounded-xl p-5 flex flex-col gap-3">
-                <h3 className="font-bold text-white text-xs font-mono uppercase tracking-wider text-red-400">
-                  Step 1: Network Service Enumeration
-                </h3>
-                <p className="text-xs text-zinc-400">
-                  Probe open ports on the target range using aggressive timing and service fingerprint scripts:
-                </p>
-                <div className="bg-[#050508] border border-zinc-800 p-3 rounded font-mono text-xs text-emerald-400">
-                  nmap -sC -sV -p 80,8080 {targetIp}
+              {currentTemplate.steps.map((step) => (
+                <div key={step.stepNumber} className="bg-[#0B0B12] border border-zinc-800/80 rounded-xl p-5 flex flex-col gap-3">
+                  <h3 className="font-bold text-white text-xs font-mono uppercase tracking-wider text-red-400">
+                    Step {step.stepNumber}: {step.title}
+                  </h3>
+                  <p className="text-xs text-zinc-400">
+                    {step.description}
+                  </p>
+                  <div className="bg-[#050508] border border-zinc-800 p-3 rounded font-mono text-xs text-emerald-400 select-all overflow-x-auto">
+                    {step.command}
+                  </div>
                 </div>
-              </div>
-
-              <div className="bg-[#0B0B12] border border-zinc-800/80 rounded-xl p-5 flex flex-col gap-3">
-                <h3 className="font-bold text-white text-xs font-mono uppercase tracking-wider text-red-400">
-                  Step 2: Actuator Endpoint Verification
-                </h3>
-                <p className="text-xs text-zinc-400">
-                  Inspect the Spring Boot Actuator health endpoint on port 8080 for unsanitized heap dumps or environment secrets:
-                </p>
-                <div className="bg-[#050508] border border-zinc-800 p-3 rounded font-mono text-xs text-emerald-400">
-                  curl -s http://{targetIp}:8080/actuator/env | jq .
-                </div>
-              </div>
+              ))}
 
               <div className="flex items-center gap-3 pt-4 border-t border-zinc-800/80">
                 <Button
@@ -630,7 +647,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                   onClick={() => setActiveTab('terminal')}
                   className="bg-red-600 hover:bg-red-700 font-bold text-xs"
                 >
-                  Switch to Kali Terminal →
+                  Switch to {currentTemplate.terminalHostname === 'darkspace-lab' ? 'Kali Terminal' : 'Dev Terminal'} →
                 </Button>
               </div>
             </div>
@@ -642,16 +659,16 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               <div className="flex-1 bg-[#020204] border border-zinc-800/80 rounded-xl p-4 font-mono text-xs text-zinc-300 flex flex-col justify-between overflow-hidden shadow-inner">
                 <div className="overflow-y-auto space-y-1.5">
                   <div className="text-zinc-500 pb-2 border-b border-zinc-900 flex items-center justify-between">
-                    <span>DarkSpace Kali Linux Attack Box v2026.1 (Interactive Pod)</span>
+                    <span>DarkSpace Virtual Environment ({currentTemplate.terminalHostname})</span>
                     <span className="text-emerald-400">● Connected: {targetIp}</span>
                   </div>
                   {terminalHistory.map((line, idx) => (
                     <div
                       key={idx}
                       className={
-                        line.startsWith('kali@')
+                        line.startsWith(`${currentTemplate.terminalUser}@`) || line.startsWith('kali@') || line.startsWith('developer@')
                           ? 'text-red-400 font-bold'
-                          : line.includes('PORT') || line.includes('80/tcp')
+                          : line.includes('PORT') || line.includes('status') || line.includes('BUILD') || line.includes('UP')
                           ? 'text-zinc-200'
                           : line.startsWith('DSS{')
                           ? 'text-emerald-400 font-black'
@@ -664,12 +681,12 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                 </div>
 
                 <form onSubmit={handleCommandSubmit} className="mt-4 pt-3 border-t border-zinc-900 flex items-center gap-2">
-                  <span className="text-red-500 font-bold">kali@darkspace-lab:~$</span>
+                  <span className="text-red-500 font-bold">{currentTemplate.terminalUser}@{currentTemplate.terminalHostname}:~$</span>
                   <input
                     type="text"
                     value={terminalCommand}
                     onChange={(e) => setTerminalCommand(e.target.value)}
-                    placeholder="Type command (e.g. nmap, curl, whoami, cat user.txt)..."
+                    placeholder="Type command (e.g. curl, docker, npm, python3, whoami, clear)..."
                     className="flex-1 bg-transparent border-none outline-none text-white font-mono text-xs"
                     autoFocus
                   />
@@ -681,16 +698,79 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             </div>
           )}
 
-          {/* TAB 5: FLAG SUBMISSION */}
+          {/* TAB 5: STUDY NOTES & FILES */}
+          {activeTab === 'notes' && (
+            <div className="p-8 max-w-4xl flex flex-col gap-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-bold text-white flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-red-500" />
+                    <span>Study Notes, Cheatsheets &amp; Resources</span>
+                  </h2>
+                  <p className="text-xs text-zinc-400 mt-1">
+                    Download official instructor lecture notes, architecture diagrams, and cheatsheets for <strong>{courseTitle}</strong>.
+                  </p>
+                </div>
+
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setIsInstructorStudioOpen(true)}
+                  className="bg-red-600 hover:bg-red-700 text-xs font-bold gap-1.5 self-start sm:self-auto"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Upload New Notes</span>
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {courseNotes.map((note) => (
+                  <div
+                    key={note.id}
+                    className="bg-[#0B0B12] border border-zinc-800/80 rounded-xl p-5 flex flex-col justify-between gap-4 hover:border-zinc-700 transition-all"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mb-2">
+                        <span className="text-amber-400 font-bold flex items-center gap-1">
+                          <FileText className="w-3.5 h-3.5" />
+                          <span>DOCUMENT</span>
+                        </span>
+                        <span>{note.fileSize || '3.2 MB'}</span>
+                      </div>
+                      <h4 className="text-sm font-bold text-white">{note.title}</h4>
+                      <p className="text-xs text-zinc-400 mt-1 leading-relaxed">{note.description}</p>
+                    </div>
+
+                    <div className="pt-3 border-t border-zinc-900 flex items-center justify-between">
+                      <span className="text-[11px] font-mono text-zinc-500 truncate max-w-[180px]">
+                        {note.fileName}
+                      </span>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => alert(`Initiating download for ${note.fileName}`)}
+                        className="bg-[#12121A] border-zinc-800 text-zinc-300 hover:text-white text-xs gap-1.5"
+                      >
+                        <Download className="w-3 h-3 text-red-400" />
+                        <span>Download</span>
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: FLAG / MILESTONE SUBMISSION */}
           {activeTab === 'flags' && (
             <div className="p-8 max-w-xl flex flex-col gap-6">
               <div>
                 <h2 className="text-xl font-bold text-white flex items-center gap-2">
                   <Flag className="w-5 h-5 text-red-500" />
-                  <span>Submit Lab Flag</span>
+                  <span>Submit Lab Flag &amp; Milestone</span>
                 </h2>
                 <p className="text-xs text-zinc-400 mt-1">
-                  Format: <code>DSS&#123;flag_string_here&#125;</code>. Flags are verified instantaneously via cryptographic hash.
+                  Format: <code>DSS&#123;milestone_token_here&#125;</code>. Submissions are verified instantaneously.
                 </p>
               </div>
 
@@ -698,10 +778,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                 <div className="p-5 rounded-xl border border-emerald-600/40 bg-emerald-950/20 flex flex-col gap-2">
                   <div className="flex items-center gap-2 text-emerald-400 font-bold text-sm">
                     <CheckCircle className="w-5 h-5" />
-                    <span>FLAG VERIFIED! 100% Progress Awarded</span>
+                    <span>MILESTONE VERIFIED! 100% Progress Awarded</span>
                   </div>
                   <p className="text-xs text-zinc-300">
-                    Flag <code>DSS&#123;burp_repeater_sqli_byp4ss_9912&#125;</code> successfully validated. Your progress has been updated on your Learner Profile.
+                    Validation complete. Your progress has been updated on your Learner Profile.
                   </p>
                   <Link href="/" className="mt-2">
                     <Button variant="secondary" size="sm" className="bg-[#12121A] text-xs">
@@ -712,12 +792,12 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               ) : (
                 <form onSubmit={handleFlagSubmit} className="flex flex-col gap-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-mono text-zinc-400">ENTER USER FLAG</label>
+                    <label className="text-xs font-mono text-zinc-400">ENTER MILESTONE TOKEN</label>
                     <input
                       type="text"
                       value={flagInput}
                       onChange={(e) => setFlagInput(e.target.value)}
-                      placeholder="DSS{burp_repeater_sqli_byp4ss_...}"
+                      placeholder="DSS{milestone_token_...}"
                       className="px-3.5 py-2.5 rounded-lg bg-[#0E0E14] border border-zinc-800 text-white font-mono text-xs focus:border-red-500 outline-none"
                       required
                     />
@@ -725,7 +805,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
                   <Button type="submit" variant="primary" size="md" className="bg-red-600 hover:bg-red-700 text-xs font-bold gap-2">
                     <Send className="w-4 h-4" />
-                    <span>Verify & Submit Flag</span>
+                    <span>Verify &amp; Submit</span>
                   </Button>
                 </form>
               )}
@@ -733,6 +813,15 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           )}
         </main>
       </div>
+
+      {/* Instructor Studio Modal */}
+      <InstructorStudioModal
+        isOpen={isInstructorStudioOpen}
+        onClose={() => setIsInstructorStudioOpen(false)}
+        courseId={course?.id || params.enrollmentId}
+        courseTitle={courseTitle}
+        onSuccess={loadCourseData}
+      />
     </div>
   );
 }

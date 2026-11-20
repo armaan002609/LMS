@@ -1,5 +1,6 @@
-import { User, Course, Enrollment, UserWithCourses } from './types';
+import { User, Course, Enrollment, UserWithCourses, CourseModuleItem, CourseResourceNote, AppNotification } from './types';
 import { getSupabaseBrowserClient } from './supabase';
+import { getCourseLabTemplate } from './course-content';
 
 export const INITIAL_COURSES: Course[] = [
   // --- WEB & SOFTWARE ---
@@ -565,3 +566,246 @@ export async function deleteUser(userId: string): Promise<boolean> {
   saveLocalEnrollments(enrollments);
   return true;
 }
+
+// ==========================================
+// COURSE MODULES, NOTES & NOTIFICATIONS STORE
+// ==========================================
+
+const LOCAL_STORAGE_KEY_MODULES = 'dss_course_modules_v1';
+const LOCAL_STORAGE_KEY_NOTES = 'dss_course_notes_v1';
+const LOCAL_STORAGE_KEY_NOTIFICATIONS = 'dss_app_notifications_v1';
+
+export const INITIAL_NOTIFICATIONS: AppNotification[] = [
+  {
+    id: 'notif-1',
+    courseId: 'c0000000-0000-0000-0000-000000000101',
+    courseTitle: 'Full Stack Development',
+    title: 'New Recorded Lecture Available',
+    message: 'Instructor uploaded "Next.js 14 Server Actions & Microservices Architecture" (45 Min).',
+    type: 'lecture',
+    actionLink: '/learn/full-stack-development',
+    createdAt: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
+    read: false,
+  },
+  {
+    id: 'notif-2',
+    courseId: 'c0000000-0000-0000-0000-000000000101',
+    courseTitle: 'Full Stack Development',
+    title: 'Live Interactive Class Scheduled',
+    message: 'Live interactive class scheduled for Tomorrow at 6:00 PM IST with Q&A and code review.',
+    type: 'live',
+    actionLink: '/learn/full-stack-development',
+    createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+    read: false,
+  },
+  {
+    id: 'notif-3',
+    courseId: 'c0000000-0000-0000-0000-000000000101',
+    courseTitle: 'Full Stack Development',
+    title: 'New Study Notes & Cheatsheet Uploaded',
+    message: 'Instructor published "Full Stack Architecture Blueprint & Docker Cheatsheet.pdf".',
+    type: 'notes',
+    actionLink: '/learn/full-stack-development',
+    createdAt: new Date(Date.now() - 1000 * 60 * 300).toISOString(),
+    read: false,
+  },
+];
+
+// 1. Fetch Course Modules
+export async function fetchCourseModules(courseId: string, courseTitle = '', category = ''): Promise<CourseModuleItem[]> {
+  const template = getCourseLabTemplate(courseTitle, category);
+  const baseModules: CourseModuleItem[] = template.initialModules.map((m, idx) => ({
+    id: `${courseId}_${m.id}`,
+    courseId,
+    title: m.title,
+    type: m.type,
+    duration: m.duration,
+    summary: `${courseTitle} core curriculum module.`,
+    createdAt: new Date(Date.now() - 1000 * 60 * 60 * (10 - idx)).toISOString(),
+  }));
+
+  if (typeof window === 'undefined') return baseModules;
+
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY_MODULES);
+    if (stored) {
+      const parsed: CourseModuleItem[] = JSON.parse(stored);
+      const userUploaded = parsed.filter((m) => m.courseId === courseId || m.courseId === courseTitle);
+      return [...baseModules, ...userUploaded];
+    }
+  } catch (err) {
+    console.error('Failed reading custom modules', err);
+  }
+
+  return baseModules;
+}
+
+// 2. Add Course Module & Notify Learners
+export async function addCourseModule(moduleData: Omit<CourseModuleItem, 'id' | 'createdAt'>, courseTitle?: string): Promise<CourseModuleItem> {
+  const newModule: CourseModuleItem = {
+    ...moduleData,
+    id: 'mod_' + Date.now(),
+    createdAt: new Date().toISOString(),
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY_MODULES);
+      const list: CourseModuleItem[] = stored ? JSON.parse(stored) : [];
+      list.push(newModule);
+      localStorage.setItem(LOCAL_STORAGE_KEY_MODULES, JSON.stringify(list));
+    } catch (err) {
+      console.error('Failed saving module', err);
+    }
+  }
+
+  // Automatically trigger notification for learners!
+  await addNotification({
+    courseId: moduleData.courseId,
+    courseTitle: courseTitle || 'Course Curriculum',
+    title: moduleData.type === 'lecture' ? 'New Recorded Lecture Uploaded' : moduleData.type === 'live' ? 'Live Interactive Class Scheduled' : 'New Module Added',
+    message: `Instructor added "${newModule.title}" to ${courseTitle || 'the course'}.`,
+    type: moduleData.type === 'live' ? 'live' : moduleData.type === 'notes' ? 'notes' : 'lecture',
+    actionLink: `/learn/${moduleData.courseId}`,
+  });
+
+  return newModule;
+}
+
+// 3. Fetch Course Notes
+export async function fetchCourseNotes(courseId: string, courseTitle = '', category = ''): Promise<CourseResourceNote[]> {
+  const template = getCourseLabTemplate(courseTitle, category);
+  const baseNotes: CourseResourceNote[] = template.initialNotes.map((n, idx) => ({
+    id: `${courseId}_${n.id}`,
+    courseId,
+    title: n.title,
+    description: n.description,
+    fileName: n.fileName,
+    fileSize: n.fileSize,
+    uploadedAt: new Date(Date.now() - 1000 * 60 * 60 * (24 * (idx + 1))).toISOString(),
+  }));
+
+  if (typeof window === 'undefined') return baseNotes;
+
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY_NOTES);
+    if (stored) {
+      const parsed: CourseResourceNote[] = JSON.parse(stored);
+      const userUploaded = parsed.filter((n) => n.courseId === courseId || n.courseId === courseTitle);
+      return [...userUploaded, ...baseNotes];
+    }
+  } catch (err) {
+    console.error('Failed reading custom notes', err);
+  }
+
+  return baseNotes;
+}
+
+// 4. Add Course Note & Notify Learners
+export async function addCourseNote(noteData: Omit<CourseResourceNote, 'id' | 'uploadedAt'>, courseTitle?: string): Promise<CourseResourceNote> {
+  const newNote: CourseResourceNote = {
+    ...noteData,
+    id: 'note_' + Date.now(),
+    uploadedAt: new Date().toISOString(),
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY_NOTES);
+      const list: CourseResourceNote[] = stored ? JSON.parse(stored) : [];
+      list.unshift(newNote);
+      localStorage.setItem(LOCAL_STORAGE_KEY_NOTES, JSON.stringify(list));
+    } catch (err) {
+      console.error('Failed saving note', err);
+    }
+  }
+
+  // Automatically trigger notification for learners!
+  await addNotification({
+    courseId: noteData.courseId,
+    courseTitle: courseTitle || 'Course Curriculum',
+    title: 'New Study Notes & Materials Uploaded',
+    message: `Instructor published "${newNote.title}" in ${courseTitle || 'your course'}.`,
+    type: 'notes',
+    actionLink: `/learn/${noteData.courseId}`,
+  });
+
+  return newNote;
+}
+
+// 5. Fetch Notifications
+export async function fetchNotifications(): Promise<AppNotification[]> {
+  if (typeof window === 'undefined') return INITIAL_NOTIFICATIONS;
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY_NOTIFICATIONS);
+    if (!stored) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify(INITIAL_NOTIFICATIONS));
+      return INITIAL_NOTIFICATIONS;
+    }
+    return JSON.parse(stored);
+  } catch {
+    return INITIAL_NOTIFICATIONS;
+  }
+}
+
+// 6. Add Notification
+export async function addNotification(notif: Omit<AppNotification, 'id' | 'createdAt' | 'read'>): Promise<AppNotification> {
+  const newNotif: AppNotification = {
+    ...notif,
+    id: 'notif_' + Date.now(),
+    createdAt: new Date().toISOString(),
+    read: false,
+  };
+
+  if (typeof window !== 'undefined') {
+    try {
+      const current = await fetchNotifications();
+      const updated = [newNotif, ...current];
+      localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify(updated));
+      // Dispatch browser custom event so active tabs immediately refresh notifications and show toasts
+      window.dispatchEvent(new CustomEvent('dss-new-notification', { detail: newNotif }));
+    } catch (err) {
+      console.error('Failed saving notification', err);
+    }
+  }
+
+  return newNotif;
+}
+
+// 7. Mark as Read
+export async function markNotificationAsRead(id: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = await fetchNotifications();
+    const updated = current.map((n) => (n.id === id ? { ...n, read: true } : n));
+    localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('dss-notifications-updated'));
+  } catch (err) {
+    console.error('Failed updating notification', err);
+  }
+}
+
+// 8. Mark All as Read
+export async function markAllNotificationsAsRead(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = await fetchNotifications();
+    const updated = current.map((n) => ({ ...n, read: true }));
+    localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify(updated));
+    window.dispatchEvent(new CustomEvent('dss-notifications-updated'));
+  } catch (err) {
+    console.error('Failed updating notifications', err);
+  }
+}
+
+// 9. Clear All Notifications
+export async function clearAllNotifications(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY_NOTIFICATIONS, JSON.stringify([]));
+    window.dispatchEvent(new CustomEvent('dss-notifications-updated'));
+  } catch (err) {
+    console.error('Failed clearing notifications', err);
+  }
+}
+

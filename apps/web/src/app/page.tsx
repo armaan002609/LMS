@@ -8,6 +8,7 @@ import { fetchLearnerCourses } from '@/lib/store';
 import { Course } from '@/lib/types';
 import { Logo } from '@/components/Logo';
 import { Button } from '@lms/ui';
+import { NotificationCenter } from '@/components/NotificationCenter';
 import {
   Terminal,
   Shield,
@@ -70,6 +71,8 @@ export default function HomePage() {
           </div>
 
           <div className="flex items-center gap-4">
+            <NotificationCenter />
+
             {user.role === 'admin' && (
               <Link href="/admin">
                 <Button variant="secondary" size="sm" className="bg-[#12121C] border-red-900/40 text-red-400 hover:bg-red-950/30 text-xs font-semibold">
