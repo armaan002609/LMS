@@ -91,11 +91,21 @@ function RemoteVideoTile({ peer, onMuteToggle }: RemoteVideoTileProps) {
     const el = videoRef.current;
     if (!el) return;
 
+    // Mobile WebKit / Safari requirement: imperative muted & playsInline
+    el.muted = true;
+    el.defaultMuted = true;
+    el.playsInline = true;
+    el.setAttribute('playsinline', 'true');
+    el.setAttribute('webkit-playsinline', 'true');
+
     if (peer.stream) {
       if (el.srcObject !== peer.stream) {
         el.srcObject = peer.stream;
       }
-      el.play().catch(() => {});
+      const playPromise = el.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {});
+      }
     }
 
     const stream = peer.stream;
@@ -103,6 +113,11 @@ function RemoteVideoTile({ peer, onMuteToggle }: RemoteVideoTileProps) {
 
     const handleTrackChange = () => {
       if (el && stream) {
+        el.muted = true;
+        el.defaultMuted = true;
+        el.playsInline = true;
+        el.setAttribute('playsinline', 'true');
+        el.setAttribute('webkit-playsinline', 'true');
         el.srcObject = stream;
         el.play().catch(() => {});
       }
@@ -133,6 +148,13 @@ function RemoteVideoTile({ peer, onMuteToggle }: RemoteVideoTileProps) {
         // @ts-ignore
         webkit-playsinline="true"
         muted={true}
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          v.muted = true;
+          v.defaultMuted = true;
+          v.playsInline = true;
+          v.play().catch(() => {});
+        }}
         className={
           showVideo
             ? 'w-full h-full object-cover'
@@ -242,7 +264,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const handlePeerMessageRef = React.useRef<((msg: any) => Promise<void>) | null>(null);
   const handleAdmissionMessageRef = React.useRef<((msg: any) => void) | null>(null);
 
-  // Mobile WebRTC Audio Unlocker
+  // Mobile WebRTC Audio & Video Autoplay Unlocker
   const unlockAudio = React.useCallback(() => {
     setNeedsAudioUnlock(false);
     try {
@@ -252,6 +274,15 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       const audios = document.querySelectorAll('audio');
       audios.forEach((a) => {
         a.play().catch(() => {});
+      });
+      const videos = document.querySelectorAll('video');
+      videos.forEach((v) => {
+        v.muted = true;
+        v.defaultMuted = true;
+        v.playsInline = true;
+        v.setAttribute('playsinline', 'true');
+        v.setAttribute('webkit-playsinline', 'true');
+        v.play().catch(() => {});
       });
     } catch {}
   }, []);
@@ -758,6 +789,15 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           { urls: 'stun:stun3.l.google.com:19302' },
           { urls: 'stun:stun4.l.google.com:19302' },
           { urls: 'stun:stun.cloudflare.com:3478' },
+          {
+            urls: [
+              'turn:openrelay.metered.ca:80',
+              'turn:openrelay.metered.ca:443',
+              'turn:openrelay.metered.ca:443?transport=tcp',
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject',
+          },
         ],
       });
 
@@ -783,6 +823,24 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
       } catch (err) {
         console.warn('Error configuring audio transceiver:', err);
+      }
+
+      // Prioritize H.264 video codec for iOS Safari & Android mobile hardware acceleration
+      try {
+        const videoTransceiver = pc.getTransceivers().find(
+          (t) => (t.receiver && t.receiver.track?.kind === 'video') ||
+                 (t.sender && t.sender.track?.kind === 'video')
+        );
+        if (videoTransceiver && 'setCodecPreferences' in videoTransceiver && typeof window !== 'undefined' && 'RTCRtpSender' in window && 'getCapabilities' in window.RTCRtpSender) {
+          const capabilities = (window.RTCRtpSender as any).getCapabilities('video');
+          if (capabilities && Array.isArray(capabilities.codecs)) {
+            const h264 = capabilities.codecs.filter((c: any) => c.mimeType?.toLowerCase() === 'video/h264');
+            const others = capabilities.codecs.filter((c: any) => c.mimeType?.toLowerCase() !== 'video/h264');
+            (videoTransceiver as any).setCodecPreferences([...h264, ...others]);
+          }
+        }
+      } catch (err) {
+        console.warn('Codec preference warning:', err);
       }
 
       if (screenStreamRef.current) {
@@ -1096,6 +1154,25 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     window.addEventListener('beforeunload', handleBeforeUnload);
     window.addEventListener('pagehide', handleBeforeUnload);
 
+    // Mobile visibilitychange listener: resume audio/video & re-announce presence
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        unlockAudio();
+        broadcastRoomMessage('peer-presence', {
+          from: myPeerId,
+          userId: user?.id,
+          name: user?.name || user?.email?.split('@')[0] || 'User',
+          role: user?.role || 'learner',
+          broadcast: false,
+          isCameraOn,
+          isMicOn,
+          isScreenSharing,
+        });
+        syncLocalTracksToPeers(mediaStreamRef.current);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     // Announce presence across both Supabase Realtime and local BroadcastChannel
     broadcastRoomMessage('peer-presence', {
       from: myPeerId,
@@ -1111,6 +1188,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       broadcastRoomMessage('peer-leave', {
         from: myPeerId,
         userId: user?.id,
@@ -1450,9 +1528,17 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           setDeviceError('Camera access is not supported by your browser.');
           return;
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-        });
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { width: { ideal: 1280, max: 1920 }, height: { ideal: 720, max: 1080 }, facingMode: 'user' },
+          });
+        } catch {
+          // Mobile fallback for front-facing camera on devices failing exact resolution constraints
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'user' },
+          });
+        }
         const videoTrack = stream.getVideoTracks()[0];
         if (!mediaStreamRef.current) {
           mediaStreamRef.current = new MediaStream();
@@ -2529,14 +2615,30 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                               <video
                                 ref={(el) => {
                                   localVideoRef.current = el;
-                                  if (el && mediaStreamRef.current && el.srcObject !== mediaStreamRef.current) {
-                                    el.srcObject = mediaStreamRef.current;
-                                    el.play().catch(() => {});
+                                  if (el) {
+                                    el.muted = true;
+                                    el.defaultMuted = true;
+                                    el.playsInline = true;
+                                    el.setAttribute('playsinline', 'true');
+                                    el.setAttribute('webkit-playsinline', 'true');
+                                    if (mediaStreamRef.current && el.srcObject !== mediaStreamRef.current) {
+                                      el.srcObject = mediaStreamRef.current;
+                                      el.play().catch(() => {});
+                                    }
                                   }
                                 }}
                                 autoPlay
                                 playsInline
-                                muted
+                                // @ts-ignore
+                                webkit-playsinline="true"
+                                muted={true}
+                                onLoadedMetadata={(e) => {
+                                  const v = e.currentTarget;
+                                  v.muted = true;
+                                  v.defaultMuted = true;
+                                  v.playsInline = true;
+                                  v.play().catch(() => {});
+                                }}
                                 className="w-full h-full object-cover scale-x-[-1]"
                               />
                             ) : (
