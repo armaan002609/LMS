@@ -5,22 +5,24 @@ import { useRouter } from 'next/navigation';
 import { Button, Input } from '@lms/ui';
 import { Logo } from '@/components/Logo';
 import { useAuth } from '@/lib/auth-context';
-import { ShieldCheck, UserCheck, Lock, AlertCircle } from 'lucide-react';
+import { Lock, AlertCircle } from 'lucide-react';
 
 export default function LoginPage() {
   const router = useRouter();
   const { login } = useAuth();
-  const [email, setEmail] = useState('learner@darkspacesecurity.io');
-  const [password, setPassword] = useState('••••••••');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = async (targetEmail?: string) => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+
     setIsLoading(true);
     setError('');
-    const emailToUse = targetEmail || email;
 
-    const res = await login(emailToUse, password);
+    const res = await login(email.trim(), password);
 
     if (res.success && res.user) {
       if (res.user.role === 'admin') {
@@ -29,14 +31,9 @@ export default function LoginPage() {
         router.push('/');
       }
     } else {
-      setError(res.error || 'Authentication failed. Please verify your credentials.');
+      setError(res.error || 'Authentication failed. Please check your email and password.');
       setIsLoading(false);
     }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    handleLogin();
   };
 
   return (
@@ -45,7 +42,7 @@ export default function LoginPage() {
         {/* Brand Header */}
         <div className="flex flex-col items-center text-center gap-2">
           <Logo size="lg" showSubtitle />
-          <p className="text-xs text-[var(--color-text-muted)] mt-1 font-mono tracking-wide">
+          <p className="text-xs text-zinc-400 mt-1 font-mono tracking-wide">
             AUTHENTICATED ACCESS ONLY
           </p>
         </div>
@@ -59,20 +56,22 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <Input
-            label="Security Email Identifier"
+            label="Email Address"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="bg-[#07070A] border-zinc-800 text-white font-mono text-sm"
-            placeholder="user@darkspacesecurity.io"
+            placeholder="name@darkspacesecurity.io"
             required
+            autoFocus
           />
           <Input
-            label="Access Passphrase"
+            label="Password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="bg-[#07070A] border-zinc-800 text-white font-mono text-sm"
+            placeholder="••••••••••••"
             required
           />
 
@@ -83,55 +82,16 @@ export default function LoginPage() {
             isLoading={isLoading}
             className="w-full mt-2 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 font-bold border-none shadow-lg shadow-red-900/40 text-white"
           >
-            Authenticate Identity
+            Sign In to Academy
           </Button>
         </form>
 
-        <div className="relative flex items-center justify-center my-1">
-          <div className="border-t border-zinc-800 w-full" />
-          <span className="bg-[#0B0B10] px-3 text-[10px] text-zinc-500 uppercase tracking-widest font-mono absolute">
-            ONE-CLICK ROLE SWITCH
+        <div className="pt-4 border-t border-zinc-900 flex items-center justify-between text-[11px] text-zinc-500">
+          <span className="flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5 text-red-500" />
+            <span>Supabase Cloud Identity & RLS</span>
           </span>
-        </div>
-
-        {/* Quick Demo Logins for smooth verification */}
-        <div className="grid grid-cols-2 gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              setEmail('learner@darkspacesecurity.io');
-              handleLogin('learner@darkspacesecurity.io');
-            }}
-            className="flex items-center gap-2 p-2.5 rounded-xl border border-zinc-800 bg-[#0E0E14] hover:border-zinc-700 hover:bg-zinc-900 transition-all text-left text-xs"
-          >
-            <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-            <div>
-              <div className="font-semibold text-white">Learner</div>
-              <div className="text-[10px] text-zinc-400 truncate">Assigned Work</div>
-            </div>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setEmail('admin@darkspacesecurity.io');
-              handleLogin('admin@darkspacesecurity.io');
-            }}
-            className="flex items-center gap-2 p-2.5 rounded-xl border border-zinc-800 bg-[#0E0E14] hover:border-red-900/60 hover:bg-red-950/20 transition-all text-left text-xs"
-          >
-            <ShieldCheck className="w-4 h-4 text-red-500 shrink-0" />
-            <div>
-              <div className="font-semibold text-white">Admin</div>
-              <div className="text-[10px] text-zinc-400 truncate">Full Command</div>
-            </div>
-          </button>
-        </div>
-
-        <div className="pt-2 border-t border-zinc-900 flex items-center justify-between text-[11px] text-zinc-500">
-          <span className="flex items-center gap-1">
-            <Lock className="w-3 h-3 text-red-500" /> Supabase RLS Protected
-          </span>
-          <span>v2.4 Cyber LMS</span>
+          <span className="font-mono">v2.4 Production</span>
         </div>
       </div>
     </div>

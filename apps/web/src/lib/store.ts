@@ -70,65 +70,26 @@ export const INITIAL_COURSES: Course[] = [
   },
 ];
 
+// Production initial state: ONLY Administrator, ZERO demo learners
 export const INITIAL_USERS: User[] = [
   {
-    id: 'u1',
-    name: 'Security Commander (Admin)',
+    id: 'b0000000-0000-0000-0000-000000000001',
+    name: 'Admin',
     email: 'admin@darkspacesecurity.io',
     role: 'admin',
-    organizationId: 'darkspace',
-    createdAt: '2026-01-15T08:00:00Z',
-  },
-  {
-    id: 'u2',
-    name: 'Alex Mercer',
-    email: 'learner@darkspacesecurity.io',
-    role: 'learner',
-    organizationId: 'darkspace',
-    createdAt: '2026-02-01T10:30:00Z',
-  },
-  {
-    id: 'u3',
-    name: 'Sarah Connor',
-    email: 'sarah.connor@darkspacesecurity.io',
-    role: 'learner',
-    organizationId: 'darkspace',
-    createdAt: '2026-02-10T14:15:00Z',
+    organizationId: 'a0000000-0000-0000-0000-000000000001',
+    createdAt: '2026-01-01T00:00:00Z',
   },
 ];
 
-export const INITIAL_ENROLLMENTS: Enrollment[] = [
-  {
-    id: 'e1',
-    userId: 'u2',
-    courseId: 'c1',
-    status: 'ACTIVE',
-    progressPct: 64,
-    assignedAt: '2026-02-02T11:00:00Z',
-  },
-  {
-    id: 'e2',
-    userId: 'u2',
-    courseId: 'c2',
-    status: 'ACTIVE',
-    progressPct: 28,
-    assignedAt: '2026-02-05T09:20:00Z',
-  },
-  {
-    id: 'e3',
-    userId: 'u3',
-    courseId: 'c2',
-    status: 'ACTIVE',
-    progressPct: 45,
-    assignedAt: '2026-02-11T12:00:00Z',
-  },
-];
+// ZERO demo enrollments
+export const INITIAL_ENROLLMENTS: Enrollment[] = [];
 
 const LOCAL_STORAGE_KEY_USERS = 'dss_users_data';
 const LOCAL_STORAGE_KEY_COURSES = 'dss_courses_data';
 const LOCAL_STORAGE_KEY_ENROLLMENTS = 'dss_enrollments_data';
 
-// Helper to get local data
+// Helper to get local data (with purge for old demo students)
 const getLocalUsers = (): User[] => {
   if (typeof window === 'undefined') return INITIAL_USERS;
   const stored = localStorage.getItem(LOCAL_STORAGE_KEY_USERS);
@@ -137,7 +98,14 @@ const getLocalUsers = (): User[] => {
     return INITIAL_USERS;
   }
   try {
-    return JSON.parse(stored);
+    const parsed: User[] = JSON.parse(stored);
+    const cleaned = parsed.filter(
+      (u) => u.email !== 'learner@darkspacesecurity.io' && u.email !== 'sarah.connor@darkspacesecurity.io'
+    );
+    if (cleaned.length !== parsed.length) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_USERS, JSON.stringify(cleaned));
+    }
+    return cleaned.length > 0 ? cleaned : INITIAL_USERS;
   } catch {
     return INITIAL_USERS;
   }
@@ -165,7 +133,12 @@ const getLocalEnrollments = (): Enrollment[] => {
     return INITIAL_ENROLLMENTS;
   }
   try {
-    return JSON.parse(stored);
+    const parsed: Enrollment[] = JSON.parse(stored);
+    const cleaned = parsed.filter((e) => e.userId !== 'u2' && e.userId !== 'u3');
+    if (cleaned.length !== parsed.length) {
+      localStorage.setItem(LOCAL_STORAGE_KEY_ENROLLMENTS, JSON.stringify(cleaned));
+    }
+    return cleaned;
   } catch {
     return INITIAL_ENROLLMENTS;
   }
@@ -255,7 +228,7 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
     }
   }
 
-  // Fallback to Local Persistent Store
+  // Fallback to Local Persistent Store (Pure live data)
   const users = getLocalUsers();
   const enrollments = getLocalEnrollments();
   const courses = getLocalCourses();
@@ -363,7 +336,7 @@ export async function updateCourseProgress(userId: string, courseId: string, pro
 
   // Local fallback
   const enrollments = getLocalEnrollments();
-  const found = enrollments.find((e) => (e.userId === userId || e.userId === 'u2') && (e.courseId === courseId || e.courseId === 'c1' || e.courseId === 'c2'));
+  const found = enrollments.find((e) => e.userId === userId && e.courseId === courseId);
   if (found) {
     found.progressPct = progressPct;
     saveLocalEnrollments(enrollments);

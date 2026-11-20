@@ -30,7 +30,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const stored = localStorage.getItem(AUTH_STORAGE_KEY);
       if (stored) {
-        setUser(JSON.parse(stored));
+        const parsed = JSON.parse(stored);
+        // If session was from old demo learner, purge it
+        if (parsed.email === 'learner@darkspacesecurity.io' || parsed.name === 'Alex Mercer') {
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          document.cookie = 'dss_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+          setUser(null);
+        } else {
+          setUser(parsed);
+        }
       }
     } catch (e) {
       console.warn('Error reading stored session', e);
@@ -44,7 +52,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-      // 1. Try Supabase Auth or DB if available
+      // 1. Authenticate with Supabase Database
       const supabase = getSupabaseBrowserClient();
       if (supabase) {
         try {
@@ -69,11 +77,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return { success: true, user: loggedUser };
           }
         } catch (supabaseErr) {
-          console.warn('Supabase auth attempt skipped', supabaseErr);
+          console.warn('Supabase query error', supabaseErr);
         }
       }
 
-      // 2. Fallback to Local Store Users
+      // 2. Query Store Users
       const users = await fetchUsersWithCourses();
       const matched = users.find((u) => u.email.toLowerCase() === cleanEmail);
 
@@ -92,14 +100,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: true, user: loggedUser };
       }
 
-      // 3. Fallback for admin default
+      // Default Admin bootstrap if database is freshly initialized
       if (cleanEmail === 'admin@darkspacesecurity.io') {
         const adminUser: User = {
-          id: 'u1',
-          name: 'Security Commander (Admin)',
+          id: 'b0000000-0000-0000-0000-000000000001',
+          name: 'Admin',
           email: 'admin@darkspacesecurity.io',
           role: 'admin',
-          organizationId: 'darkspace',
+          organizationId: 'a0000000-0000-0000-0000-000000000001',
           createdAt: new Date().toISOString(),
         };
         setUser(adminUser);
@@ -108,23 +116,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return { success: true, user: adminUser };
       }
 
-      // 4. Fallback for learner default
-      if (cleanEmail === 'learner@darkspacesecurity.io') {
-        const learnerUser: User = {
-          id: 'u2',
-          name: 'Alex Mercer',
-          email: 'learner@darkspacesecurity.io',
-          role: 'learner',
-          organizationId: 'darkspace',
-          createdAt: new Date().toISOString(),
-        };
-        setUser(learnerUser);
-        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(learnerUser));
-        document.cookie = `dss_role=learner; path=/; max-age=86400; SameSite=Lax`;
-        return { success: true, user: learnerUser };
-      }
-
-      return { success: false, error: 'Access Denied: Email not registered in DarkSpaceSecurity identity directory.' };
+      return { success: false, error: 'Access Denied: Unrecognized email identifier. Contact your administrator.' };
     } finally {
       setIsLoading(false);
     }
