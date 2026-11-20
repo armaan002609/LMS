@@ -56,6 +56,7 @@ import {
   Shield,
   Trash2,
   GraduationCap,
+  MessageSquare,
 } from 'lucide-react';
 
 interface RemotePeer {
@@ -63,7 +64,7 @@ interface RemotePeer {
   userId: string;
   name: string;
   role: string;
-  stream?: MediaStream;
+  stream?: MediaStream | null;
   isMicOn: boolean;
   isCameraOn: boolean;
   isScreenSharing: boolean;
@@ -119,8 +120,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   // Remote WebRTC Peers (Two-Way Video & Audio)
   const [remotePeers, setRemotePeers] = useState<RemotePeer[]>([]);
+  const [mobileLiveView, setMobileLiveView] = useState<'stage' | 'chat' | 'participants'>('stage');
+  const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
 
   const peerConnectionsRef = React.useRef<{ [peerId: string]: RTCPeerConnection }>({});
+  const peerUserIdMapRef = React.useRef<{ [peerId: string]: string }>({});
   const broadcastChannelRef = React.useRef<BroadcastChannel | null>(null);
   const admissionChannelRef = React.useRef<BroadcastChannel | null>(null);
   const sbChannelRef = React.useRef<any>(null);
@@ -128,6 +132,45 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const localPeerIdRef = React.useRef<string>('');
   const handlePeerMessageRef = React.useRef<((msg: any) => Promise<void>) | null>(null);
   const handleAdmissionMessageRef = React.useRef<((msg: any) => void) | null>(null);
+
+  // Mobile WebRTC Audio Unlocker
+  const unlockAudio = React.useCallback(() => {
+    setNeedsAudioUnlock(false);
+    try {
+      if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+        audioContextRef.current.resume();
+      }
+      const audios = document.querySelectorAll('audio');
+      audios.forEach((a) => {
+        a.play().catch(() => {});
+      });
+    } catch {}
+  }, []);
+
+  // Strict deduplication of remote peers by userId and peerId
+  // Guarantees each participant only ever renders once even after refresh/reconnect
+  const uniqueRemotePeers = React.useMemo(() => {
+    const seenUserIds = new Set<string>();
+    const seenPeerIds = new Set<string>();
+    const list: RemotePeer[] = [];
+
+    for (let i = remotePeers.length - 1; i >= 0; i--) {
+      const p = remotePeers[i];
+      if (!p) continue;
+      if (user && p.userId && p.userId === user.id) continue;
+      if (p.peerId === localPeerIdRef.current) continue;
+
+      if (p.userId) {
+        if (seenUserIds.has(p.userId)) continue;
+        seenUserIds.add(p.userId);
+      }
+      if (seenPeerIds.has(p.peerId)) continue;
+      seenPeerIds.add(p.peerId);
+
+      list.unshift(p);
+    }
+    return list;
+  }, [remotePeers, user]);
 
   // Video Player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -580,8 +623,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       targetRole: string,
       isInitiator: boolean
     ) => {
+      // If we already have an active peer connection for this targetPeerId, return it
       if (peerConnectionsRef.current[targetPeerId]) {
         return peerConnectionsRef.current[targetPeerId];
+      }
+
+      // Purge any older connection for the same user (e.g. they refreshed their browser)
+      if (targetUserId) {
+        Object.keys(peerConnectionsRef.current).forEach((pId) => {
+          if (pId !== targetPeerId && peerUserIdMapRef.current[pId] === targetUserId) {
+            try {
+              peerConnectionsRef.current[pId]?.close();
+            } catch {}
+            delete peerConnectionsRef.current[pId];
+            delete peerUserIdMapRef.current[pId];
+          }
+        });
       }
 
       const pc = new RTCPeerConnection({
@@ -624,7 +681,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       pc.ontrack = (event) => {
         const stream = event.streams[0] || new MediaStream([event.track]);
         setRemotePeers((prev) => {
-          const exists = prev.find((p) => p.peerId === targetPeerId);
+          const exists = prev.find((p) => p.peerId === targetPeerId || (targetUserId && p.userId === targetUserId));
           if (exists) {
             let activeStream = exists.stream;
             if (!activeStream) {
@@ -633,7 +690,9 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               activeStream.addTrack(event.track);
             }
             const updatedStream = new MediaStream(activeStream.getTracks());
-            return prev.map((p) => (p.peerId === targetPeerId ? { ...p, stream: updatedStream } : p));
+            return prev.map((p) =>
+              p.peerId === exists.peerId ? { ...p, peerId: targetPeerId, stream: updatedStream } : p
+            );
           }
           return [
             ...prev,
@@ -662,7 +721,23 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
       };
 
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+          setTimeout(() => {
+            if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+              try { pc.close(); } catch {}
+              delete peerConnectionsRef.current[targetPeerId];
+              delete peerUserIdMapRef.current[targetPeerId];
+              setRemotePeers((prev) => prev.filter((p) => p.peerId !== targetPeerId));
+            }
+          }, 3000);
+        }
+      };
+
       peerConnectionsRef.current[targetPeerId] = pc;
+      if (targetUserId) {
+        peerUserIdMapRef.current[targetPeerId] = targetUserId;
+      }
 
       if (isInitiator) {
         pc.createOffer()
@@ -686,39 +761,50 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     const handlePeerMessage = async (msg: any) => {
       if (!msg || typeof msg !== 'object') return;
       if (msg.from === myPeerId) return;
+      if (user && msg.userId && msg.userId === user.id) return;
       if (isMessageProcessed(msg)) return;
 
       if (msg.type === 'peer-presence') {
+        // If presence has a userId, purge any old stale connections for that user
+        if (msg.userId) {
+          Object.keys(peerConnectionsRef.current).forEach((pId) => {
+            if (pId !== msg.from && peerUserIdMapRef.current[pId] === msg.userId) {
+              try {
+                peerConnectionsRef.current[pId]?.close();
+              } catch {}
+              delete peerConnectionsRef.current[pId];
+              delete peerUserIdMapRef.current[pId];
+            }
+          });
+        }
+        peerUserIdMapRef.current[msg.from] = msg.userId || '';
+
         const isInitiator = myPeerId > msg.from;
         setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, isInitiator);
 
         setRemotePeers((prev) => {
-          const existing = prev.find((p) => p.peerId === msg.from);
-          if (existing) {
-            return prev.map((p) =>
-              p.peerId === msg.from
-                ? {
-                    ...p,
-                    name: msg.name || p.name,
-                    role: msg.role || p.role,
-                    isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : p.isCameraOn,
-                    isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : p.isMicOn,
-                    isScreenSharing: typeof msg.isScreenSharing === 'boolean' ? msg.isScreenSharing : p.isScreenSharing,
-                  }
-                : p
-            );
-          }
+          // Filter out stale peers with same userId or same peerId
+          const filtered = prev.filter((p) => {
+            if (msg.userId && p.userId === msg.userId && p.peerId !== msg.from) {
+              return false;
+            }
+            return p.peerId !== msg.from;
+          });
+
+          const existing = prev.find((p) => (msg.userId && p.userId === msg.userId) || p.peerId === msg.from);
+
           return [
-            ...prev,
+            ...filtered,
             {
               peerId: msg.from,
               userId: msg.userId,
-              name: msg.name,
-              role: msg.role,
-              isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : true,
-              isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : true,
-              isScreenSharing: Boolean(msg.isScreenSharing),
-              isMutedLocally: false,
+              name: msg.name || existing?.name || 'Participant',
+              role: msg.role || existing?.role || 'learner',
+              stream: existing?.stream || null,
+              isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : existing ? existing.isMicOn : true,
+              isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : existing ? existing.isCameraOn : true,
+              isScreenSharing: typeof msg.isScreenSharing === 'boolean' ? msg.isScreenSharing : existing ? existing.isScreenSharing : false,
+              isMutedLocally: existing ? existing.isMutedLocally : false,
             },
           ];
         });
@@ -738,7 +824,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       } else if (msg.type === 'track-state-changed') {
         setRemotePeers((prev) =>
           prev.map((p) =>
-            p.peerId === msg.from || p.peerId === msg.peerId
+            p.peerId === msg.from || p.peerId === msg.peerId || (msg.userId && p.userId === msg.userId)
               ? {
                   ...p,
                   isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : p.isCameraOn,
@@ -781,18 +867,47 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           }
         }
       } else if (msg.type === 'peer-leave') {
-        const pc = peerConnectionsRef.current[msg.from];
-        if (pc) {
+        const targetPeerId = msg.from;
+        const targetUserId = msg.userId;
+        if (targetPeerId && peerConnectionsRef.current[targetPeerId]) {
           try {
-            pc.close();
+            peerConnectionsRef.current[targetPeerId].close();
           } catch {}
-          delete peerConnectionsRef.current[msg.from];
+          delete peerConnectionsRef.current[targetPeerId];
+          delete peerUserIdMapRef.current[targetPeerId];
         }
-        setRemotePeers((prev) => prev.filter((p) => p.peerId !== msg.from));
+        if (targetUserId) {
+          Object.keys(peerConnectionsRef.current).forEach((pId) => {
+            if (peerUserIdMapRef.current[pId] === targetUserId) {
+              try {
+                peerConnectionsRef.current[pId]?.close();
+              } catch {}
+              delete peerConnectionsRef.current[pId];
+              delete peerUserIdMapRef.current[pId];
+            }
+          });
+        }
+        setRemotePeers((prev) =>
+          prev.filter((p) => {
+            if (targetPeerId && p.peerId === targetPeerId) return false;
+            if (targetUserId && p.userId === targetUserId) return false;
+            return true;
+          })
+        );
       }
     };
 
     handlePeerMessageRef.current = handlePeerMessage;
+
+    // Synchronous unload broadcast to immediately inform peers on refresh/close
+    const handleBeforeUnload = () => {
+      broadcastRoomMessage('peer-leave', {
+        from: myPeerId,
+        userId: user?.id,
+      });
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
 
     // Announce presence across both Supabase Realtime and local BroadcastChannel
     broadcastRoomMessage('peer-presence', {
@@ -807,8 +922,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     });
 
     return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
       broadcastRoomMessage('peer-leave', {
         from: myPeerId,
+        userId: user?.id,
       });
       Object.values(peerConnectionsRef.current).forEach((pc) => {
         try {
@@ -816,6 +934,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         } catch {}
       });
       peerConnectionsRef.current = {};
+      peerUserIdMapRef.current = {};
       handlePeerMessageRef.current = null;
       setRemotePeers([]);
     };
@@ -843,6 +962,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   // Request to join room handler (Role-Based Admission)
   const handleRequestJoinRoom = () => {
+    unlockAudio();
     if (!user) {
       alert('Please log in to enter the live classroom.');
       return;
@@ -1522,7 +1642,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       {/* Main Split Interface */}
       <div className="flex-1 flex flex-col md:flex-row">
         {/* Left Curriculum Outline */}
-        <aside className="w-full md:w-80 border-r border-zinc-800/80 bg-[#08080C] p-4 flex flex-col gap-4">
+        <aside className={`w-full md:w-80 border-r border-zinc-800/80 bg-[#08080C] p-4 flex flex-col gap-4 ${activeTab === 'live' ? 'hidden md:flex' : 'flex'}`}>
           <div className="flex items-center justify-between pb-2 border-b border-zinc-800/80">
             <span className="text-xs font-mono font-bold uppercase tracking-wider text-zinc-400">
               Curriculum Modules
@@ -1844,7 +1964,55 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           {/* TAB 2: LIVE INTERACTIVE CLASS & WEBRTC IN-APP STUDIO */}
           {activeTab === 'live' && (
             <div className="flex-1 flex flex-col md:flex-row h-full">
-              <div className="flex-1 p-6 md:p-8 flex flex-col gap-4">
+              <div className={`flex-1 p-2 sm:p-4 md:p-6 lg:p-8 flex flex-col gap-3 sm:gap-4 ${mobileLiveView !== 'stage' ? 'hidden md:flex' : 'flex'}`}>
+                {/* Mobile Live View Switcher (Stage / Chat / Participants) */}
+                {isInLiveRoom && admissionStatus === 'admitted' && (
+                  <div className="md:hidden flex items-center justify-between p-1 bg-[#09090F] border border-zinc-800 rounded-xl gap-1 text-xs font-mono">
+                    <button
+                      type="button"
+                      onClick={() => setMobileLiveView('stage')}
+                      className={`flex-1 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        mobileLiveView === 'stage'
+                          ? 'bg-red-600 text-white shadow'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <Radio className="w-3.5 h-3.5" />
+                      <span>Stage</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileLiveView('chat');
+                        setLiveSidebarTab('chat');
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        mobileLiveView === 'chat'
+                          ? 'bg-red-600 text-white shadow'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>Chat ({chatMessages.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMobileLiveView('participants');
+                        setLiveSidebarTab('participants');
+                      }}
+                      className={`flex-1 py-1.5 rounded-lg font-bold flex items-center justify-center gap-1.5 transition-all ${
+                        mobileLiveView === 'participants'
+                          ? 'bg-red-600 text-white shadow'
+                          : 'text-zinc-400 hover:text-white'
+                      }`}
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      <span>People ({1 + uniqueRemotePeers.length})</span>
+                    </button>
+                  </div>
+                )}
+
                 {/* 1. WAITING ROOM SCREEN FOR LEARNERS */}
                 {admissionStatus === 'waiting' ? (
                   <div className="relative aspect-video w-full bg-[#020204] border-2 border-amber-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between p-6">
@@ -1923,9 +2091,63 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                   </div>
                 ) : isInLiveRoom && admissionStatus === 'admitted' ? (
                   /* 2. ACTIVE LIVE CLASSROOM STUDIO */
-                  <div className="relative aspect-video w-full bg-[#020204] border-2 border-red-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group">
+                  <div
+                    onClick={unlockAudio}
+                    onTouchStart={unlockAudio}
+                    className="relative w-full min-h-[460px] sm:min-h-[500px] md:min-h-0 md:aspect-video bg-[#020204] border-2 border-red-600/80 rounded-2xl overflow-hidden shadow-2xl flex flex-col justify-between group"
+                  >
+                    {/* Tap to Unmute Floating Prompt (Mobile WebRTC Autoplay policy unlock) */}
+                    {needsAudioUnlock && (
+                      <button
+                        type="button"
+                        onClick={unlockAudio}
+                        className="absolute top-14 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-gradient-to-r from-red-600 to-red-800 text-white font-mono text-xs font-bold shadow-2xl flex items-center gap-2 animate-bounce cursor-pointer border border-red-400/80"
+                      >
+                        <Volume2 className="w-4 h-4 animate-pulse text-amber-300" />
+                        <span>Tap to Unmute Audio (Mobile)</span>
+                      </button>
+                    )}
+
+                    {/* Dedicated WebRTC Audio Elements for Mobile & Desktop (Kept in render tree with fixed position & opacity 0.001) */}
+                    <div
+                      style={{
+                        position: 'fixed',
+                        top: -9999,
+                        left: -9999,
+                        width: 1,
+                        height: 1,
+                        opacity: 0.001,
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      {uniqueRemotePeers.map((peer) => (
+                        <audio
+                          key={`remote-audio-el-${peer.peerId}`}
+                          ref={(el) => {
+                            if (el) {
+                              if (peer.stream && el.srcObject !== peer.stream) {
+                                el.srcObject = peer.stream;
+                              }
+                              el.muted = Boolean(peer.isMutedLocally);
+                              el.volume = 1.0;
+                              const playPromise = el.play();
+                              if (playPromise !== undefined) {
+                                playPromise.catch(() => {
+                                  setNeedsAudioUnlock(true);
+                                });
+                              }
+                            }
+                          }}
+                          autoPlay
+                          playsInline
+                          // @ts-ignore
+                          webkit-playsinline="true"
+                        />
+                      ))}
+                    </div>
+
                     {/* Top Room Banner */}
-                    <div className="p-4 flex items-center justify-between z-20 bg-gradient-to-b from-black/90 to-transparent">
+                    <div className="p-3 sm:p-4 flex items-center justify-between z-20 bg-gradient-to-b from-black/90 to-transparent">
                       <div className="flex items-center gap-2">
                         <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-600 text-white text-[10px] font-mono font-bold uppercase tracking-wider animate-pulse">
                           <Radio className="w-3.5 h-3.5" />
@@ -1936,13 +2158,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         </span>
                       </div>
 
-                      <div className="flex items-center gap-2.5 text-xs font-mono text-zinc-300">
+                      <div className="flex items-center gap-2 sm:gap-2.5 text-xs font-mono text-zinc-300">
                         {/* Auto-Admit Policy Toggle for Instructor / Admin */}
                         {(user?.role === 'instructor' || user?.role === 'admin') && (
                           <button
                             type="button"
                             onClick={handleToggleAutoAdmit}
-                            className={`px-2.5 py-1 rounded-lg font-bold text-[10px] flex items-center gap-1.5 transition-all shadow-sm ${
+                            className={`px-2 sm:px-2.5 py-1 rounded-lg font-bold text-[10px] flex items-center gap-1.5 transition-all shadow-sm ${
                               autoAdmitEveryone
                                 ? 'bg-emerald-950/90 text-emerald-400 border border-emerald-800/80'
                                 : 'bg-amber-950/90 text-amber-400 border border-amber-800/80'
@@ -1968,14 +2190,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
                         <span className="text-zinc-400 flex items-center gap-1">
                           <Users className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>{remotePeers.length + 1} in Room</span>
+                          <span>{uniqueRemotePeers.length + 1} in Room</span>
                         </span>
                       </div>
                     </div>
 
                     {/* Waiting Room Management HUD Banner (Instructor & Admin Only) */}
                     {(user?.role === 'instructor' || user?.role === 'admin') && waitingList.length > 0 && (
-                      <div className="mx-4 mt-1 p-2.5 bg-amber-950/90 border border-amber-600/80 rounded-xl flex items-center justify-between gap-2 z-20 shadow-xl animate-in fade-in duration-200">
+                      <div className="mx-2 sm:mx-4 mt-1 p-2.5 bg-amber-950/90 border border-amber-600/80 rounded-xl flex items-center justify-between gap-2 z-20 shadow-xl animate-in fade-in duration-200">
                         <div className="flex items-center gap-2">
                           <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
                           <span className="text-xs font-bold text-white font-mono">
@@ -2018,7 +2240,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     )}
 
                     {/* Center Video & Multi-Participant Stage Viewport */}
-                    <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black p-3">
+                    <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black p-2 sm:p-3">
                       {/* View 1: Screen Share is Active */}
                       {isScreenSharing ? (
                         <div className="w-full h-full relative flex items-center justify-center bg-black">
@@ -2035,7 +2257,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
                           {/* Floating PiP Local Video Thumbnail */}
                           {isCameraOn && (
-                            <div className="absolute bottom-4 right-4 z-20 w-44 h-28 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black">
+                            <div className="absolute bottom-4 right-4 z-20 w-36 h-24 sm:w-44 sm:h-28 rounded-xl overflow-hidden border-2 border-red-500 shadow-2xl bg-black">
                               <video
                                 ref={localVideoRef}
                                 autoPlay
@@ -2051,10 +2273,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         </div>
                       ) : (
                         /* View 2: Multi-Participant Two-Way Video Grid (Instructor + Learner + Admin) */
-                        <div className={`w-full h-full grid gap-3 ${
-                          remotePeers.length === 0
+                        <div className={`w-full h-full grid gap-2 sm:gap-3 ${
+                          uniqueRemotePeers.length === 0
                             ? 'grid-cols-1 md:grid-cols-2'
-                            : remotePeers.length === 1
+                            : uniqueRemotePeers.length === 1
                             ? 'grid-cols-1 md:grid-cols-2'
                             : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
                         }`}>
@@ -2101,7 +2323,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           </div>
 
                           {/* Tile 2+: Remote Peers (Two-Way Live Video & Audio) */}
-                          {remotePeers.map((peer) => (
+                          {uniqueRemotePeers.map((peer) => (
                             <div
                               key={peer.peerId}
                               className="relative aspect-video rounded-xl overflow-hidden bg-[#0A0A12] border border-zinc-800 shadow-xl flex items-center justify-center"
@@ -2115,8 +2337,14 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                                 }}
                                 autoPlay
                                 playsInline
-                                muted={Boolean(peer.isMutedLocally)}
-                                className={peer.isCameraOn !== false ? 'w-full h-full object-cover' : 'hidden'}
+                                // @ts-ignore
+                                webkit-playsinline="true"
+                                muted={true}
+                                className={
+                                  peer.isCameraOn !== false
+                                    ? 'w-full h-full object-cover'
+                                    : 'opacity-0 absolute pointer-events-none w-0 h-0'
+                                }
                               />
 
                               {/* Fallback Avatar when Camera is OFF */}
@@ -2182,7 +2410,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           ))}
 
                           {/* Placeholder Card If Waiting for Other Participant */}
-                          {remotePeers.length === 0 && (
+                          {uniqueRemotePeers.length === 0 && (
                             <div className="relative aspect-video rounded-xl overflow-hidden bg-[#06060C] border border-dashed border-zinc-800 p-6 flex flex-col items-center justify-center text-center gap-3">
                               <div className="w-12 h-12 rounded-full bg-red-950/40 border border-red-900/60 flex items-center justify-center text-red-400">
                                 <Radio className="w-6 h-6 animate-pulse" />
@@ -2210,13 +2438,16 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     </div>
 
                     {/* Interactive Bottom Control Bar */}
-                    <div className="relative z-20 p-4 bg-gradient-to-t from-black/95 to-transparent flex items-center justify-between">
-                      <div className="flex items-center gap-2 flex-wrap">
+                    <div className="relative z-20 p-2.5 sm:p-4 bg-gradient-to-t from-black/95 to-transparent flex items-center justify-between gap-1.5 sm:gap-2 flex-wrap sm:flex-nowrap">
+                      <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
                         {/* Mic Button */}
                         <button
                           type="button"
-                          onClick={toggleMic}
-                          className={`p-2.5 rounded-full border transition-all ${
+                          onClick={() => {
+                            unlockAudio();
+                            toggleMic();
+                          }}
+                          className={`p-2 sm:p-2.5 rounded-full border transition-all ${
                             isMicOn
                               ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
                               : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
@@ -2229,8 +2460,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         {/* Camera Button */}
                         <button
                           type="button"
-                          onClick={toggleCamera}
-                          className={`p-2.5 rounded-full border transition-all ${
+                          onClick={() => {
+                            unlockAudio();
+                            toggleCamera();
+                          }}
+                          className={`p-2 sm:p-2.5 rounded-full border transition-all ${
                             isCameraOn
                               ? 'bg-emerald-600 border-emerald-500 text-white shadow-md shadow-emerald-950'
                               : 'bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white'
@@ -2243,8 +2477,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         {/* Screen Share Button */}
                         <button
                           type="button"
-                          onClick={toggleScreenShare}
-                          className={`px-3 py-2 rounded-full border text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
+                          onClick={() => {
+                            unlockAudio();
+                            toggleScreenShare();
+                          }}
+                          className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full border text-[11px] sm:text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
                             isScreenSharing
                               ? 'bg-red-600 border-red-500 text-white shadow-md shadow-red-950'
                               : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:text-white hover:border-red-600'
@@ -2252,14 +2489,17 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           title={isScreenSharing ? 'Stop Screen Sharing' : 'Share Screen (Display)'}
                         >
                           {isScreenSharing ? <MonitorOff className="w-3.5 h-3.5" /> : <Monitor className="w-3.5 h-3.5 text-red-500" />}
-                          <span>{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
+                          <span className="hidden sm:inline">{isScreenSharing ? 'Stop Sharing' : 'Share Screen'}</span>
                         </button>
 
                         {/* Raise Hand Button */}
                         <button
                           type="button"
-                          onClick={handleToggleHand}
-                          className={`px-3 py-2 rounded-full border text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
+                          onClick={() => {
+                            unlockAudio();
+                            handleToggleHand();
+                          }}
+                          className={`px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-full border text-[11px] sm:text-xs font-mono font-bold flex items-center gap-1.5 transition-all ${
                             isHandRaised
                               ? 'bg-amber-600 border-amber-500 text-white shadow-md shadow-amber-950'
                               : 'bg-zinc-900 border-zinc-700 text-zinc-300 hover:text-white'
@@ -2267,31 +2507,46 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           title="Raise Hand to Ask Question"
                         >
                           <Hand className="w-3.5 h-3.5" />
-                          <span>{isHandRaised ? 'Hand Raised' : 'Raise Hand'}</span>
+                          <span className="hidden sm:inline">{isHandRaised ? 'Hand Raised' : 'Raise Hand'}</span>
+                        </button>
+
+                        {/* Mobile Quick Chat Switcher */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            unlockAudio();
+                            setMobileLiveView('chat');
+                            setLiveSidebarTab('chat');
+                          }}
+                          className="md:hidden px-2.5 py-1.5 rounded-full border border-zinc-700 bg-zinc-900 text-zinc-300 text-[11px] font-mono font-bold flex items-center gap-1"
+                          title="Open Live Chat"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-red-400" />
+                          <span>Chat</span>
                         </button>
                       </div>
 
-                      {/* Right controls: Share link, leave */}
-                      <div className="flex items-center gap-2">
+                      {/* Right controls: Share link, leave, delete */}
+                      <div className="flex items-center gap-1.5 sm:gap-2">
                         <button
                           type="button"
                           onClick={handleCopyMeetingLink}
-                          className="px-2.5 py-1.5 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5"
+                          className="p-2 sm:px-2.5 sm:py-1.5 rounded-lg bg-zinc-900/80 border border-zinc-700 hover:border-zinc-600 text-zinc-300 hover:text-white text-xs font-mono flex items-center gap-1.5"
                           title="Copy Classroom Room Link"
                         >
                           {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
-                          <span>{copiedLink ? 'Copied' : 'Share'}</span>
+                          <span className="hidden sm:inline">{copiedLink ? 'Copied' : 'Share'}</span>
                         </button>
 
                         {/* Leave Room Button */}
                         <button
                           type="button"
                           onClick={handleLeaveRoom}
-                          className="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-zinc-950 transition-all"
+                          className="px-2.5 sm:px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-zinc-950 transition-all"
                           title="Leave Live Studio"
                         >
-                          <PhoneOff className="w-3.5 h-3.5" />
-                          <span>Leave</span>
+                          <PhoneOff className="w-3.5 h-3.5 text-red-400" />
+                          <span className="hidden sm:inline">Leave</span>
                         </button>
 
                         {/* End & Delete Class Button (Host / Admin Only) */}
@@ -2299,11 +2554,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           <button
                             type="button"
                             onClick={handleDeleteLiveClass}
-                            className="px-3.5 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-red-950 transition-all"
+                            className="px-2.5 sm:px-3.5 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-red-950 transition-all"
                             title="End and delete this live class session for all learners"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            <span>Delete Class</span>
+                            <span className="hidden sm:inline">Delete Class</span>
                           </button>
                         )}
                       </div>
@@ -2419,8 +2674,22 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               </div>
 
               {/* Live Classroom Chat & Participants Sidebar */}
-              <div className="w-full md:w-80 border-l border-zinc-800/80 bg-[#08080C] flex flex-col justify-between p-4">
+              <div className={`${mobileLiveView === 'stage' ? 'hidden md:flex' : 'flex'} w-full md:w-80 border-t md:border-t-0 md:border-l border-zinc-800/80 bg-[#08080C] flex flex-col justify-between p-4`}>
                 <div className="flex-1 flex flex-col min-h-0">
+                  {/* Mobile Back to Video Stage Header Bar */}
+                  <div className="md:hidden pb-3 mb-2 border-b border-zinc-800/80 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setMobileLiveView('stage')}
+                      className="px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-700 hover:bg-zinc-800 text-xs font-mono font-bold text-white flex items-center gap-1.5"
+                    >
+                      <span>← Back to Video Stage</span>
+                    </button>
+                    <span className="text-[11px] font-mono text-zinc-400 capitalize">
+                      {liveSidebarTab}
+                    </span>
+                  </div>
+
                   {/* Tab Selector between Chat and Participants */}
                   <div className="pb-3 border-b border-zinc-800 flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-3 text-xs font-mono">
@@ -2444,7 +2713,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                             : 'border-transparent text-zinc-500 hover:text-white'
                         }`}
                       >
-                        <span>Participants ({1 + remotePeers.length})</span>
+                        <span>Participants ({1 + uniqueRemotePeers.length})</span>
                         {isInstructorOrAdmin && waitingList.length > 0 && (
                           <span className="px-1.5 py-0.2 rounded-full bg-amber-500/20 text-amber-400 text-[9px] font-bold border border-amber-500/40 animate-pulse">
                             +{waitingList.length}
@@ -2563,7 +2832,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                       {/* Connected Participants List */}
                       <div className="space-y-1.5">
                         <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider block px-1">
-                          In Room ({1 + remotePeers.length})
+                          In Room ({1 + uniqueRemotePeers.length})
                         </span>
 
                         {/* Local User */}
@@ -2595,7 +2864,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         </div>
 
                         {/* Remote WebRTC Peers (Two-Way Live Audio & Video Connected) */}
-                        {remotePeers.map((peer) => (
+                        {uniqueRemotePeers.map((peer) => (
                           <div
                             key={peer.peerId}
                             className={`p-2.5 rounded-lg border flex items-center justify-between ${
@@ -2653,7 +2922,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         ))}
 
                         {/* If no other peers yet */}
-                        {remotePeers.length === 0 && (
+                        {uniqueRemotePeers.length === 0 && (
                           <div className="py-4 text-center text-zinc-500 text-[11px] font-mono">
                             No other participants connected yet.
                           </div>
