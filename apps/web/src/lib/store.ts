@@ -125,6 +125,7 @@ export const INITIAL_ENROLLMENTS: Enrollment[] = [
 ];
 
 const LOCAL_STORAGE_KEY_USERS = 'dss_users_data';
+const LOCAL_STORAGE_KEY_COURSES = 'dss_courses_data';
 const LOCAL_STORAGE_KEY_ENROLLMENTS = 'dss_enrollments_data';
 
 // Helper to get local data
@@ -139,6 +140,20 @@ const getLocalUsers = (): User[] => {
     return JSON.parse(stored);
   } catch {
     return INITIAL_USERS;
+  }
+};
+
+const getLocalCourses = (): Course[] => {
+  if (typeof window === 'undefined') return INITIAL_COURSES;
+  const stored = localStorage.getItem(LOCAL_STORAGE_KEY_COURSES);
+  if (!stored) {
+    localStorage.setItem(LOCAL_STORAGE_KEY_COURSES, JSON.stringify(INITIAL_COURSES));
+    return INITIAL_COURSES;
+  }
+  try {
+    return JSON.parse(stored);
+  } catch {
+    return INITIAL_COURSES;
   }
 };
 
@@ -159,6 +174,12 @@ const getLocalEnrollments = (): Enrollment[] => {
 const saveLocalUsers = (users: User[]) => {
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCAL_STORAGE_KEY_USERS, JSON.stringify(users));
+  }
+};
+
+const saveLocalCourses = (courses: Course[]) => {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(LOCAL_STORAGE_KEY_COURSES, JSON.stringify(courses));
   }
 };
 
@@ -194,7 +215,7 @@ export async function fetchCourses(): Promise<Course[]> {
       console.warn('Supabase fetch error, fallback to local', err);
     }
   }
-  return INITIAL_COURSES;
+  return getLocalCourses();
 }
 
 export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
@@ -237,7 +258,7 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
   // Fallback to Local Persistent Store
   const users = getLocalUsers();
   const enrollments = getLocalEnrollments();
-  const courses = INITIAL_COURSES;
+  const courses = getLocalCourses();
 
   return users.map((user) => {
     const userEnrollments = enrollments.filter((e) => e.userId === user.id && e.status === 'ACTIVE');
@@ -325,6 +346,31 @@ export async function unassignCourse(userId: string, courseId: string): Promise<
   return true;
 }
 
+export async function updateCourseProgress(userId: string, courseId: string, progressPct: number): Promise<boolean> {
+  const supabase = getSupabaseBrowserClient();
+  if (supabase) {
+    try {
+      const { error } = await supabase
+        .from('enrollments')
+        .update({ progress_pct: progressPct })
+        .eq('user_id', userId)
+        .eq('course_id', courseId);
+      if (!error) return true;
+    } catch (err) {
+      console.error('Supabase update progress error', err);
+    }
+  }
+
+  // Local fallback
+  const enrollments = getLocalEnrollments();
+  const found = enrollments.find((e) => (e.userId === userId || e.userId === 'u2') && (e.courseId === courseId || e.courseId === 'c1' || e.courseId === 'c2'));
+  if (found) {
+    found.progressPct = progressPct;
+    saveLocalEnrollments(enrollments);
+  }
+  return true;
+}
+
 export async function createNewUser(name: string, email: string, role: 'admin' | 'learner' | 'instructor', initialCourseId?: string): Promise<User> {
   const newUser: User = {
     id: 'u_' + Date.now(),
@@ -366,6 +412,43 @@ export async function createNewUser(name: string, email: string, role: 'admin' |
   }
 
   return newUser;
+}
+
+export async function createNewCourse(courseData: Omit<Course, 'id'>): Promise<Course> {
+  const newCourse: Course = {
+    ...courseData,
+    id: 'c_' + Date.now(),
+  };
+
+  const supabase = getSupabaseBrowserClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('courses').insert({
+        title: courseData.title,
+        slug: courseData.slug,
+        summary: courseData.summary,
+        category: courseData.category,
+        level: courseData.level,
+        total_hours: courseData.totalHours,
+        modules_count: courseData.modulesCount,
+        target_lab_ip: courseData.targetLabIp,
+        organization_id: 'a0000000-0000-0000-0000-000000000001',
+      }).select().single();
+
+      if (!error && data) {
+        newCourse.id = data.id;
+        return newCourse;
+      }
+    } catch (err) {
+      console.error('Supabase create course error', err);
+    }
+  }
+
+  // Local fallback
+  const courses = getLocalCourses();
+  courses.push(newCourse);
+  saveLocalCourses(courses);
+  return newCourse;
 }
 
 export async function deleteUser(userId: string): Promise<boolean> {

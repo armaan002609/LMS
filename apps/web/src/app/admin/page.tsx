@@ -12,6 +12,7 @@ import {
   assignCourse,
   unassignCourse,
   createNewUser,
+  createNewCourse,
   deleteUser,
 } from '@/lib/store';
 import { isSupabaseConfigured } from '@/lib/supabase';
@@ -29,6 +30,8 @@ import {
   AlertCircle,
   UserPlus,
   LogOut,
+  BookPlus,
+  Cpu,
 } from 'lucide-react';
 
 export default function AdminDashboardPage() {
@@ -48,6 +51,15 @@ export default function AdminDashboardPage() {
   const [newRole, setNewRole] = useState<'learner' | 'admin' | 'instructor'>('learner');
   const [newInitialCourse, setNewInitialCourse] = useState('');
   const [actionError, setActionError] = useState('');
+
+  // Add Course Modal State
+  const [isAddCourseOpen, setIsAddCourseOpen] = useState(false);
+  const [newCourseTitle, setNewCourseTitle] = useState('');
+  const [newCourseCategory, setNewCourseCategory] = useState('Offensive Security');
+  const [newCourseLevel, setNewCourseLevel] = useState<'Beginner' | 'Intermediate' | 'Advanced'>('Intermediate');
+  const [newCourseSummary, setNewCourseSummary] = useState('');
+  const [newCourseHours, setNewCourseHours] = useState(40);
+  const [newCourseLabIp, setNewCourseLabIp] = useState('10.10.50.20');
 
   // Course Assignment Quick Selector State
   const [assigningUserId, setAssigningUserId] = useState<string | null>(null);
@@ -78,7 +90,6 @@ export default function AdminDashboardPage() {
     if (!authLoading && !user) {
       router.replace('/login');
     } else if (user && user.role !== 'admin') {
-      // Non-admin redirect
       router.replace('/');
     } else if (user) {
       loadData();
@@ -103,6 +114,37 @@ export default function AdminDashboardPage() {
       await loadData();
     } catch (err: any) {
       setActionError(err.message || 'Failed to create user');
+    }
+  };
+
+  // Handle Add New Course
+  const handleAddCourse = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setActionError('');
+    if (!newCourseTitle.trim()) {
+      setActionError('Course title is required');
+      return;
+    }
+
+    const slug = newCourseTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+
+    try {
+      await createNewCourse({
+        title: newCourseTitle.trim(),
+        slug,
+        summary: newCourseSummary.trim() || 'Comprehensive hands-on cybersecurity curriculum and virtual labs.',
+        category: newCourseCategory,
+        level: newCourseLevel,
+        totalHours: Number(newCourseHours) || 40,
+        modulesCount: 12,
+        targetLabIp: newCourseLabIp.trim() || '10.10.50.20',
+      });
+      setIsAddCourseOpen(false);
+      setNewCourseTitle('');
+      setNewCourseSummary('');
+      await loadData();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to create course track');
     }
   };
 
@@ -221,19 +263,31 @@ export default function AdminDashboardPage() {
               User & Course Command Center
             </h1>
             <p className="text-xs text-zinc-400 mt-1">
-              Provision users, assign offensive security curriculums, and monitor learner work.
+              Provision users, assign offensive security curriculums, and manage training tracks.
             </p>
           </div>
 
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setIsAddUserOpen(true)}
-            className="gap-2 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 text-white font-bold border-none shadow-lg shadow-red-950/50"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Add New User</span>
-          </Button>
+          <div className="flex items-center gap-3">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsAddCourseOpen(true)}
+              className="gap-2 bg-[#12121A] border-zinc-800 text-zinc-200 hover:text-white hover:border-zinc-700"
+            >
+              <BookPlus className="w-4 h-4 text-red-500" />
+              <span>Create Course Track</span>
+            </Button>
+
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setIsAddUserOpen(true)}
+              className="gap-2 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 hover:to-red-700 text-white font-bold border-none shadow-lg shadow-red-950/50"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Add New User</span>
+            </Button>
+          </div>
         </div>
 
         {/* 4 Metrics Cards */}
@@ -468,6 +522,39 @@ export default function AdminDashboardPage() {
           </div>
         </section>
 
+        {/* Catalog Course Tracks Section */}
+        <section className="bg-[#0B0B10] border border-[#1E1E28] rounded-2xl p-6 flex flex-col gap-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-red-500" />
+              <h2 className="text-sm font-bold tracking-tight">Available Academy Tracks & Target Pods</h2>
+            </div>
+            <span className="text-xs font-mono text-zinc-500">{coursesList.length} Tracks Ready</span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {coursesList.map((c) => (
+              <div key={c.id} className="bg-[#07070A] border border-zinc-800/80 rounded-xl p-4 flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-zinc-500 mb-2">
+                    <span className="text-red-400 font-bold">{c.category}</span>
+                    <span>{c.level}</span>
+                  </div>
+                  <h4 className="text-xs font-bold text-white line-clamp-1">{c.title}</h4>
+                  <p className="text-[11px] text-zinc-400 mt-1 line-clamp-2">{c.summary}</p>
+                </div>
+                <div className="mt-3 pt-2.5 border-t border-zinc-900 flex items-center justify-between text-[10px] font-mono text-zinc-500">
+                  <span className="flex items-center gap-1 text-emerald-400">
+                    <Cpu className="w-3 h-3" />
+                    <span>{c.targetLabIp || '10.10.11.45'}</span>
+                  </span>
+                  <span>{c.totalHours} Hours</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         {/* Supabase Connection Setup Box */}
         <section className="bg-[#08080C] border border-[#1E1E28] rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
@@ -581,6 +668,125 @@ export default function AdminDashboardPage() {
                   className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs"
                 >
                   Create & Authorize User
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Course Track Modal */}
+      {isAddCourseOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-[#0B0B10] border border-[#1E1E28] rounded-2xl max-w-md w-full p-6 shadow-2xl flex flex-col gap-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <BookPlus className="w-5 h-5 text-red-500" />
+                <h3 className="text-base font-bold text-white">Create New Course Track</h3>
+              </div>
+              <button
+                onClick={() => setIsAddCourseOpen(false)}
+                className="text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {actionError && (
+              <div className="p-3 text-xs bg-red-950/60 text-red-400 border border-red-900/60 rounded-xl">
+                {actionError}
+              </div>
+            )}
+
+            <form onSubmit={handleAddCourse} className="flex flex-col gap-4">
+              <Input
+                label="Track Title"
+                placeholder="e.g. Mobile Application Penetration Testing"
+                value={newCourseTitle}
+                onChange={(e) => setNewCourseTitle(e.target.value)}
+                className="bg-[#07070A] border-zinc-800 text-white text-xs"
+                required
+              />
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-zinc-400 font-medium">Category</label>
+                  <select
+                    value={newCourseCategory}
+                    onChange={(e) => setNewCourseCategory(e.target.value)}
+                    className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-red-600"
+                  >
+                    <option value="Offensive Security">Offensive Security</option>
+                    <option value="Web Security">Web Security</option>
+                    <option value="Cloud Security">Cloud Security</option>
+                    <option value="Defensive Security">Defensive Security</option>
+                    <option value="Exploit Dev">Exploit Dev</option>
+                    <option value="AI Security">AI Security</option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs text-zinc-400 font-medium">Difficulty Level</label>
+                  <select
+                    value={newCourseLevel}
+                    onChange={(e) => setNewCourseLevel(e.target.value as any)}
+                    className="bg-[#07070A] border border-zinc-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-red-600"
+                  >
+                    <option value="Beginner">Beginner</option>
+                    <option value="Intermediate">Intermediate</option>
+                    <option value="Advanced">Advanced</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Input
+                  label="Target Lab Host IP"
+                  placeholder="10.10.50.20"
+                  value={newCourseLabIp}
+                  onChange={(e) => setNewCourseLabIp(e.target.value)}
+                  className="bg-[#07070A] border-zinc-800 text-white text-xs font-mono"
+                  required
+                />
+
+                <Input
+                  label="Total Hours"
+                  type="number"
+                  value={String(newCourseHours)}
+                  onChange={(e) => setNewCourseHours(Number(e.target.value) || 40)}
+                  className="bg-[#07070A] border-zinc-800 text-white text-xs font-mono"
+                  required
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs text-zinc-400 font-medium">Syllabus Summary</label>
+                <textarea
+                  value={newCourseSummary}
+                  onChange={(e) => setNewCourseSummary(e.target.value)}
+                  rows={3}
+                  placeholder="Describe key learning outcomes, exploitation tools, and target environments..."
+                  className="bg-[#07070A] border border-zinc-800 rounded-lg p-2.5 text-xs text-white focus:outline-none focus:border-red-600 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-zinc-900">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => setIsAddCourseOpen(false)}
+                  className="text-xs"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  type="submit"
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold text-xs"
+                >
+                  Publish Track
                 </Button>
               </div>
             </form>
