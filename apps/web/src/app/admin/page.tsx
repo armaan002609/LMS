@@ -17,6 +17,7 @@ import {
   assignLearnerToInstructor,
   unassignLearnerFromInstructor,
   bulkAssignLearnersToInstructor,
+  updateUserRole,
 } from '@/lib/store';
 import { isSupabaseConfigured } from '@/lib/supabase';
 import { UserWithCourses, Course } from '@/lib/types';
@@ -153,6 +154,12 @@ export default function AdminDashboardPage() {
   // Handle Unassign Instructor from Learner
   const handleUnassignInstructor = async (learnerId: string) => {
     await unassignLearnerFromInstructor(learnerId);
+    await loadData();
+  };
+
+  // Handle Update User Role
+  const handleUpdateUserRole = async (userId: string, newRole: 'learner' | 'instructor' | 'admin') => {
+    await updateUserRole(userId, newRole);
     await loadData();
   };
 
@@ -330,7 +337,12 @@ export default function AdminDashboardPage() {
                 if (instructors.length > 0 && instructors[0]) {
                   openManageInstructorModal(instructors[0].id);
                 } else {
-                  alert('Please create at least one Instructor identity first.');
+                  if (confirm('No instructor accounts found. Would you like to create an Instructor identity now?')) {
+                    setNewRole('instructor');
+                    setNewName('Lead Faculty Instructor');
+                    setNewEmail('instructor@darkspacesecurity.io');
+                    setIsAddUserOpen(true);
+                  }
                 }
               }}
               className="gap-2 bg-amber-950/40 border border-amber-900/60 text-amber-400 hover:bg-amber-950/70 font-semibold text-xs shadow-md shadow-amber-950/30"
@@ -501,17 +513,22 @@ export default function AdminDashboardPage() {
 
                       {/* Role */}
                       <td className="py-4 px-4">
-                        <span
-                          className={`text-[10px] font-mono px-2 py-0.5 rounded uppercase font-bold border ${
+                        <select
+                          value={u.role}
+                          onChange={(e) => handleUpdateUserRole(u.id, e.target.value as any)}
+                          className={`text-[10px] font-mono px-2 py-1 rounded uppercase font-bold border bg-[#06060A] cursor-pointer focus:outline-none transition-colors ${
                             u.role === 'admin'
-                              ? 'bg-red-950/60 text-red-400 border-red-900/60'
+                              ? 'text-red-400 border-red-900/60 hover:border-red-600'
                               : u.role === 'instructor'
-                              ? 'bg-amber-950/60 text-amber-400 border-amber-900/60'
-                              : 'bg-zinc-900 text-zinc-300 border-zinc-700'
+                              ? 'text-amber-400 border-amber-900/60 hover:border-amber-600'
+                              : 'text-zinc-300 border-zinc-700 hover:border-zinc-500'
                           }`}
+                          title="Click to change role"
                         >
-                          {u.role}
-                        </span>
+                          <option value="learner" className="bg-[#0B0B10] text-zinc-300">Learner</option>
+                          <option value="instructor" className="bg-[#0B0B10] text-amber-400">Instructor</option>
+                          <option value="admin" className="bg-[#0B0B10] text-red-400">Admin</option>
+                        </select>
                       </td>
 
                       {/* Assigned Mentor / Learners */}
@@ -521,8 +538,18 @@ export default function AdminDashboardPage() {
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-amber-950/40 border border-amber-900/60 text-[11px] font-semibold text-amber-300">
                                 <GraduationCap className="w-3.5 h-3.5 text-amber-500" />
-                                <span>{u.assignedInstructorName}</span>
+                                <span>{u.assignedInstructorName || 'Assigned Instructor'}</span>
                               </span>
+                              <button
+                                onClick={() => {
+                                  setSelectedInstructorToAssign(u.assignedInstructorId || (instructors[0]?.id || ''));
+                                  setAssigningInstructorUserId(u.id);
+                                }}
+                                title="Change assigned mentor"
+                                className="text-[10px] text-zinc-400 hover:text-amber-400 underline font-mono"
+                              >
+                                Change
+                              </button>
                               <button
                                 onClick={() => handleUnassignInstructor(u.id)}
                                 title="Unassign instructor"
@@ -532,15 +559,10 @@ export default function AdminDashboardPage() {
                               </button>
                             </div>
                           ) : assigningInstructorUserId === u.id ? (
-                            <div className="flex items-center gap-1 bg-[#161622] border border-amber-900/60 p-1 rounded-lg">
+                            <div className="flex items-center gap-1.5 bg-[#161622] border border-amber-900/60 p-1.5 rounded-lg">
                               <select
                                 value={selectedInstructorToAssign}
-                                onChange={(e) => {
-                                  const instId = e.target.value;
-                                  if (instId) {
-                                    handleAssignInstructor(u.id, instId);
-                                  }
-                                }}
+                                onChange={(e) => setSelectedInstructorToAssign(e.target.value)}
                                 className="bg-[#09090D] border border-zinc-700 rounded px-2 py-1 text-[11px] text-white focus:outline-none"
                               >
                                 <option value="">Select Instructor...</option>
@@ -551,10 +573,25 @@ export default function AdminDashboardPage() {
                                 ))}
                               </select>
                               <button
+                                type="button"
+                                onClick={() => {
+                                  if (!selectedInstructorToAssign) {
+                                    alert('Please choose an instructor from the dropdown.');
+                                    return;
+                                  }
+                                  handleAssignInstructor(u.id, selectedInstructorToAssign);
+                                }}
+                                disabled={!selectedInstructorToAssign}
+                                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white rounded text-[10px] font-bold"
+                              >
+                                Assign
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => setAssigningInstructorUserId(null)}
                                 className="text-zinc-400 hover:text-white p-0.5"
                               >
-                                <X className="w-3 h-3" />
+                                <X className="w-3.5 h-3.5" />
                               </button>
                             </div>
                           ) : (
@@ -563,7 +600,12 @@ export default function AdminDashboardPage() {
                               <button
                                 onClick={() => {
                                   if (instructors.length === 0) {
-                                    alert('Please create at least one Instructor identity first.');
+                                    if (confirm('No instructor accounts found. Would you like to create an Instructor identity now?')) {
+                                      setNewRole('instructor');
+                                      setNewName('Lead Faculty Instructor');
+                                      setNewEmail('instructor@darkspacesecurity.io');
+                                      setIsAddUserOpen(true);
+                                    }
                                     return;
                                   }
                                   setSelectedInstructorToAssign(instructors[0]?.id || '');
@@ -582,9 +624,9 @@ export default function AdminDashboardPage() {
                             </span>
                             <button
                               onClick={() => openManageInstructorModal(u.id)}
-                              className="text-[10px] font-mono text-zinc-400 hover:text-white underline"
+                              className="text-[10px] font-mono text-amber-400 hover:text-amber-300 underline font-semibold"
                             >
-                              Manage
+                              Manage Learners
                             </button>
                           </div>
                         ) : (

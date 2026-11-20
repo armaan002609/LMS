@@ -188,13 +188,21 @@ export const INITIAL_COURSES: Course[] = [
   },
 ];
 
-// Production initial state: ONLY Administrator, ZERO demo learners
+// Production initial state: Administrator and Faculty Instructor, ZERO demo learners
 export const INITIAL_USERS: User[] = [
   {
     id: 'b0000000-0000-0000-0000-000000000001',
     name: 'Admin',
     email: 'admin@darkspacesecurity.io',
     role: 'admin',
+    organizationId: 'a0000000-0000-0000-0000-000000000001',
+    createdAt: '2026-01-01T00:00:00Z',
+  },
+  {
+    id: 'b0000000-0000-0000-0000-000000000002',
+    name: 'Lead Faculty Instructor',
+    email: 'instructor@darkspacesecurity.io',
+    role: 'instructor',
     organizationId: 'a0000000-0000-0000-0000-000000000001',
     createdAt: '2026-01-01T00:00:00Z',
   },
@@ -220,9 +228,14 @@ const getLocalUsers = (): User[] => {
     const cleaned = parsed.filter(
       (u) => u.email !== 'learner@darkspacesecurity.io' && u.email !== 'sarah.connor@darkspacesecurity.io'
     );
-    if (cleaned.length !== parsed.length) {
-      localStorage.setItem(LOCAL_STORAGE_KEY_USERS, JSON.stringify(cleaned));
+    // Ensure at least one instructor exists in persistent storage
+    if (!cleaned.some((u) => u.role === 'instructor')) {
+      const defaultInstructor = INITIAL_USERS.find((u) => u.role === 'instructor');
+      if (defaultInstructor) {
+        cleaned.push(defaultInstructor);
+      }
     }
+    localStorage.setItem(LOCAL_STORAGE_KEY_USERS, JSON.stringify(cleaned));
     return cleaned.length > 0 ? cleaned : INITIAL_USERS;
   } catch {
     return INITIAL_USERS;
@@ -326,6 +339,9 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
         const courses = await fetchCourses();
         return usersData.map((u: any) => {
           const userEnrollments = (enrollmentsData || []).filter((e: any) => e.user_id === u.id && e.status === 'ACTIVE');
+          const matchedInst = u.assigned_instructor_id
+            ? usersData.find((i: any) => i.id === u.assigned_instructor_id)
+            : null;
           return {
             id: u.id,
             name: u.name,
@@ -334,7 +350,7 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
             organizationId: u.organization_id || 'darkspace',
             createdAt: u.created_at,
             assignedInstructorId: u.assigned_instructor_id || undefined,
-            assignedInstructorName: u.assigned_instructor_name || undefined,
+            assignedInstructorName: matchedInst ? matchedInst.name : (u.assigned_instructor_name || undefined),
             assignedCourses: userEnrollments.map((e: any) => {
               const matchedCourse = courses.find((c) => c.id === e.course_id) || e.courses;
               return {
@@ -361,8 +377,12 @@ export async function fetchUsersWithCourses(): Promise<UserWithCourses[]> {
 
   return users.map((user) => {
     const userEnrollments = enrollments.filter((e) => e.userId === user.id && e.status === 'ACTIVE');
+    const matchedInst = user.assignedInstructorId
+      ? users.find((i) => i.id === user.assignedInstructorId)
+      : null;
     return {
       ...user,
+      assignedInstructorName: matchedInst ? matchedInst.name : (user.assignedInstructorName || undefined),
       assignedCourses: userEnrollments.map((e) => {
         const c = courses.find((course) => course.id === e.courseId);
         return {
@@ -535,8 +555,16 @@ export async function createNewUser(
 
 export async function assignLearnerToInstructor(learnerId: string, instructorId: string): Promise<boolean> {
   const users = getLocalUsers();
-  const instructor = users.find((u) => u.id === instructorId && u.role === 'instructor');
-  const instructorName = instructor ? instructor.name : undefined;
+  let instructor = users.find((u) => u.id === instructorId);
+  let instructorName = instructor?.name;
+
+  if (!instructorName) {
+    const all = await fetchUsersWithCourses();
+    const found = all.find((u) => u.id === instructorId);
+    if (found) {
+      instructorName = found.name;
+    }
+  }
 
   const updatedUsers = users.map((u) => {
     if (u.id === learnerId) {
@@ -629,8 +657,17 @@ export async function unassignLearnerFromInstructor(learnerId: string): Promise<
 
 export async function bulkAssignLearnersToInstructor(learnerIds: string[], instructorId: string): Promise<boolean> {
   const users = getLocalUsers();
-  const instructor = users.find((u) => u.id === instructorId && u.role === 'instructor');
-  const instructorName = instructor ? instructor.name : undefined;
+  let instructor = users.find((u) => u.id === instructorId);
+  let instructorName = instructor?.name;
+
+  if (!instructorName) {
+    const all = await fetchUsersWithCourses();
+    const found = all.find((u) => u.id === instructorId);
+    if (found) {
+      instructorName = found.name;
+    }
+  }
+
   const learnerSet = new Set(learnerIds);
 
   const updatedUsers = users.map((u) => {
@@ -641,10 +678,31 @@ export async function bulkAssignLearnersToInstructor(learnerIds: string[], instr
         assignedInstructorName: instructorName,
       };
     }
+    if (u.assignedInstructorId === instructorId && !learnerSet.has(u.id)) {
+      const copy = { ...u };
+      delete copy.assignedInstructorId;
+      delete copy.assignedInstructorName;
+      return copy;
+    }
     return u;
   });
 
   saveLocalUsers(updatedUsers);
+
+  const supabase = getSupabaseBrowserClient();
+  if (supabase) {
+    try {
+      if (learnerIds.length > 0) {
+        await supabase.from('users').update({ assigned_instructor_id: instructorId }).in('id', learnerIds);
+      }
+      const unselectedUsers = users.filter((u) => u.assignedInstructorId === instructorId && !learnerSet.has(u.id));
+      if (unselectedUsers.length > 0) {
+        await supabase.from('users').update({ assigned_instructor_id: null }).in('id', unselectedUsers.map((u) => u.id));
+      }
+    } catch (e) {
+      console.warn('Supabase bulk assign instructor error', e);
+    }
+  }
 
   if (typeof window !== 'undefined') {
     try {
@@ -660,6 +718,42 @@ export async function bulkAssignLearnersToInstructor(learnerIds: string[], instr
               assignedInstructorName: instructorName,
             })
           );
+        } else if (parsed.assignedInstructorId === instructorId && !learnerSet.has(parsed.id)) {
+          const copy = { ...parsed };
+          delete copy.assignedInstructorId;
+          delete copy.assignedInstructorName;
+          localStorage.setItem('dss_active_user_session', JSON.stringify(copy));
+        }
+      }
+    } catch {}
+    window.dispatchEvent(new CustomEvent('dss-users-updated'));
+  }
+
+  return true;
+}
+
+export async function updateUserRole(userId: string, newRole: 'learner' | 'instructor' | 'admin'): Promise<boolean> {
+  const users = getLocalUsers();
+  const updatedUsers = users.map((u) => (u.id === userId ? { ...u, role: newRole } : u));
+  saveLocalUsers(updatedUsers);
+
+  const supabase = getSupabaseBrowserClient();
+  if (supabase) {
+    try {
+      await supabase.from('users').update({ role: newRole }).eq('id', userId);
+    } catch (e) {
+      console.warn('Supabase update role error', e);
+    }
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const activeSession = localStorage.getItem('dss_active_user_session');
+      if (activeSession) {
+        const parsed = JSON.parse(activeSession);
+        if (parsed.id === userId) {
+          localStorage.setItem('dss_active_user_session', JSON.stringify({ ...parsed, role: newRole }));
+          document.cookie = `dss_role=${newRole}; path=/; max-age=86400; SameSite=Lax`;
         }
       }
     } catch {}

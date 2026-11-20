@@ -82,8 +82,9 @@ INSERT INTO public.organizations (id, slug, name)
 VALUES ('a0000000-0000-0000-0000-000000000001', 'darkspace', 'Dark Space Security')
 ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name;
 
--- Insert Admin Account
+-- Insert Admin and Instructor Accounts
 INSERT INTO public.users (id, email, name, role, organization_id)
 VALUES 
-    ('b0000000-0000-0000-0000-000000000001', 'admin@darkspacesecurity.io', 'Admin', 'admin', 'a0000000-0000-0000-0000-000000000001')
+    ('b0000000-0000-0000-0000-000000000001', 'admin@darkspacesecurity.io', 'Admin', 'admin', 'a0000000-0000-0000-0000-000000000001'),
+    ('b0000000-0000-0000-0000-000000000002', 'instructor@darkspacesecurity.io', 'Lead Faculty Instructor', 'instructor', 'a0000000-0000-0000-0000-000000000001')
 ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role;

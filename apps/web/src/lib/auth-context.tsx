@@ -78,6 +78,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             .single();
 
           if (dbUser) {
+            let instructorName = dbUser.assigned_instructor_name;
+            if (!instructorName && dbUser.assigned_instructor_id) {
+              try {
+                const { data: inst } = await supabase.from('users').select('name').eq('id', dbUser.assigned_instructor_id).single();
+                if (inst) instructorName = inst.name;
+              } catch {}
+            }
+
             const loggedUser: User = {
               id: dbUser.id,
               name: dbUser.name,
@@ -86,7 +94,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               organizationId: dbUser.organization_id || 'darkspace',
               createdAt: dbUser.created_at,
               assignedInstructorId: dbUser.assigned_instructor_id || undefined,
-              assignedInstructorName: dbUser.assigned_instructor_name || undefined,
+              assignedInstructorName: instructorName || undefined,
             };
             setUser(loggedUser);
             localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(loggedUser));

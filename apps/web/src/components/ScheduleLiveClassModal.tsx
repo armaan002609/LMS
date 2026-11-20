@@ -58,13 +58,17 @@ export function ScheduleLiveClassModal({
     fetchUsersWithCourses().then((users) => {
       const insts = users.filter((u) => u.role === 'instructor');
       setAvailableInstructors(insts);
+      if (insts.length > 0 && !selectedInstructorId && user?.role === 'admin') {
+        setSelectedInstructorId(insts[0]?.id || '');
+        setInstructorName(insts[0]?.name || 'Lead Faculty Instructor');
+      }
     });
 
     if (user && user.role === 'instructor') {
       setSelectedInstructorId(user.id);
       setInstructorName(user.name);
     }
-  }, [defaultCourseId, user]);
+  }, [defaultCourseId, user, selectedInstructorId]);
 
   if (!isOpen) return null;
 
