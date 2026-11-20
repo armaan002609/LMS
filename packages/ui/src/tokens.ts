@@ -1,19 +1,19 @@
 /**
- * Canonical Design Tokens (PRD §9, UI_UX_DESIGN.md §2)
+ * Canonical Design Tokens (Dark Space Security Theme - PRD §9, UI_UX_DESIGN.md §2)
  */
 export const DEFAULT_DESIGN_TOKENS = {
-  '--color-primary': '#4F46E5',
+  '--color-primary': '#DC2626',
   '--color-primary-contrast': '#FFFFFF',
-  '--color-secondary': '#0EA5E9',
+  '--color-secondary': '#990000',
   '--color-success': '#16A34A',
   '--color-warning': '#D97706',
   '--color-danger': '#DC2626',
-  '--color-surface': '#FFFFFF',
-  '--color-surface-muted': '#F8FAFC',
-  '--color-text': '#0F172A',
-  '--color-text-muted': '#475569',
-  '--color-border': '#E2E8F0',
-  '--font-sans': 'Inter, system-ui, sans-serif',
+  '--color-surface': '#0A0A0E',
+  '--color-surface-muted': '#12121A',
+  '--color-text': '#F8FAFC',
+  '--color-text-muted': '#94A3B8',
+  '--color-border': '#27272A',
+  '--font-sans': 'Montserrat, system-ui, sans-serif',
   '--radius-md': '8px',
   '--radius-lg': '12px',
   '--space-1': '4px',

@@ -2,8 +2,11 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'LMS Portal — Multi-Tenant Learning Platform',
-  description: 'Enterprise grade white-label learning management system',
+  title: 'Dark Space Security | LMS & Cyber Training Portal',
+  description: 'Elevate your cybersecurity career with Dark Space Security. Hands-on training in Ethical Hacking, VAPT, SOC, and AI.',
+  icons: {
+    icon: 'https://darkspacesecurity.io/images/logo.png',
+  },
 };
 
 export default function RootLayout({
@@ -12,8 +15,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="antialiased bg-[var(--color-surface)] text-[var(--color-text)]">
+    <html lang="en" className="dark">
+      <body className="antialiased bg-[var(--color-surface)] text-[var(--color-text)] font-sans">
         {children}
       </body>
     </html>
