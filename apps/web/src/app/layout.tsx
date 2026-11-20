@@ -2,10 +2,11 @@ import './globals.css';
 import type { Metadata } from 'next';
 
 export const metadata: Metadata = {
-  title: 'Dark Space Security | LMS & Cyber Training Portal',
-  description: 'Elevate your cybersecurity career with Dark Space Security. Hands-on training in Ethical Hacking, VAPT, SOC, and AI.',
+  title: 'DarkSpaceSecurity | LMS & Cyber Training Portal',
+  description: 'Elevate your cybersecurity career with DarkSpaceSecurity. Industry-leading training in Ethical Hacking, VAPT, SOC, and AI.',
   icons: {
-    icon: 'https://darkspacesecurity.io/images/logo.png',
+    icon: '/logo-mark.png',
+    apple: '/logo-mark.png',
   },
 };
 

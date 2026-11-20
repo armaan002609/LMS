@@ -3,8 +3,8 @@
 import React from 'react';
 import Link from 'next/link';
 import { Button } from '@lms/ui';
+import { Logo } from '@/components/Logo';
 import {
-  Shield,
   PlayCircle,
   BarChart3,
   Terminal,
@@ -23,21 +23,11 @@ import {
 export default function HomePage() {
   return (
     <div className="min-h-screen flex flex-col bg-[var(--color-surface)] text-[var(--color-text)] cyber-grid">
-      {/* Top Navigation Bar with Pill Menu (Dark Space Signature) */}
+      {/* Top Navigation Bar with Pill Menu (DarkSpaceSecurity Signature) */}
       <header className="border-b border-[var(--color-border)] bg-[#040406]/90 backdrop-blur-xl px-6 py-3.5 sticky top-0 z-50 flex items-center justify-between">
-        {/* Brand */}
-        <Link href="/" className="flex items-center gap-3 group">
-          <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-red-600 via-red-700 to-red-950 flex items-center justify-center shadow-lg shadow-red-950/60 border border-red-500/30 group-hover:border-red-400 transition-colors">
-            <Shield className="w-5 h-5 text-white" />
-          </div>
-          <div className="flex flex-col">
-            <span className="font-extrabold text-base tracking-wider text-white">
-              DARK SPACE <span className="text-[var(--color-primary)]">SECURITY</span>
-            </span>
-            <span className="text-[9px] text-[var(--color-text-muted)] tracking-widest uppercase font-mono">
-              Secure · Learn · Upgrade
-            </span>
-          </div>
+        {/* Brand Logo & Name Matching Uploaded Asset */}
+        <Link href="/" className="group">
+          <Logo size="md" showSubtitle />
         </Link>
 
         {/* Center Pill Menu */}
@@ -422,8 +412,9 @@ export default function HomePage() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-[var(--color-border)] bg-[#020204] px-6 py-8 mt-12 text-center text-xs text-zinc-500 flex flex-col gap-2">
-        <p>© 2026 Dark Space Security (darkspacesecurity.io). All rights reserved. Secure · Learn · Upgrade.</p>
+      <footer className="border-t border-[var(--color-border)] bg-[#020204] px-6 py-8 mt-12 flex flex-col items-center gap-3 text-center text-xs text-zinc-500">
+        <Logo size="sm" />
+        <p>© 2026 DarkSpaceSecurity (darkspacesecurity.io). All rights reserved. Secure · Learn · Upgrade.</p>
         <p className="font-mono text-[11px] text-zinc-600">Enterprise Multi-Tenant Learning System · AES-256 Encrypted Lab Sandboxes</p>
       </footer>
     </div>

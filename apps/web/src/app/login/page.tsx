@@ -3,7 +3,8 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { Button, Input } from '@lms/ui';
-import { Shield, Lock, ArrowLeft } from 'lucide-react';
+import { Logo } from '@/components/Logo';
+import { Lock, ArrowLeft } from 'lucide-react';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('admin@darkspacesecurity.io');
@@ -52,13 +53,8 @@ export default function LoginPage() {
 
       <div className="max-w-md w-full bg-[#0B0B10] border border-[var(--color-border)] rounded-2xl p-8 shadow-2xl flex flex-col gap-6 relative">
         <div className="flex flex-col items-center text-center gap-2">
-          <div className="w-12 h-12 bg-gradient-to-br from-red-600 to-red-900 text-white rounded-xl flex items-center justify-center shadow-lg shadow-red-900/40">
-            <Shield className="w-6 h-6" />
-          </div>
-          <h1 className="text-xl font-extrabold text-white tracking-wide">
-            DARK SPACE <span className="text-[var(--color-primary)]">SECURITY</span>
-          </h1>
-          <p className="text-xs text-[var(--color-text-muted)]">Sign in to your cybersecurity academy</p>
+          <Logo size="lg" showSubtitle />
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">Sign in to your cybersecurity academy</p>
         </div>
 
         {error && (

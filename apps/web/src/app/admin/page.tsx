@@ -3,6 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { Button } from '@lms/ui';
+import { Logo } from '@/components/Logo';
 import { Users, BookOpen, Shield, Award, Palette, Globe, Terminal } from 'lucide-react';
 
 export default function AdminDashboardPage() {
@@ -18,9 +19,8 @@ export default function AdminDashboardPage() {
       {/* Top Header */}
       <header className="border-b border-[var(--color-border)] bg-[#07070A] px-8 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/" className="font-extrabold text-lg text-white flex items-center gap-2">
-            <Shield className="w-5 h-5 text-red-500" />
-            <span>Dark Space Security</span>
+          <Link href="/">
+            <Logo size="sm" />
           </Link>
           <span className="text-[11px] text-red-400 bg-red-950/60 border border-red-900/40 px-2.5 py-0.5 rounded-full font-bold">
             Security Admin Console

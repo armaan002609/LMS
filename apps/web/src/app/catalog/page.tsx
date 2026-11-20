@@ -3,7 +3,8 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { Button, Input } from '@lms/ui';
-import { Shield, Search, ArrowLeft, Terminal } from 'lucide-react';
+import { Logo } from '@/components/Logo';
+import { Search, ArrowLeft, Terminal } from 'lucide-react';
 
 export default function CatalogPage() {
   const [search, setSearch] = useState('');
@@ -81,9 +82,12 @@ export default function CatalogPage() {
               <span>Learning Hub</span>
             </Button>
           </Link>
-          <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-[var(--color-primary)]" />
-            <span className="font-bold text-base text-white">Program Catalog</span>
+          <div className="flex items-center gap-3">
+            <Link href="/">
+              <Logo size="sm" />
+            </Link>
+            <span className="text-zinc-600 font-mono">/</span>
+            <span className="font-bold text-sm text-white">Programs</span>
           </div>
         </div>
       </header>

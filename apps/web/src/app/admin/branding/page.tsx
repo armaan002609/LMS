@@ -4,7 +4,8 @@ import React, { useState } from 'react';
 import Link from 'next/link';
 import { Button, Input, Badge } from '@lms/ui';
 import { validateContrast } from '@lms/ui';
-import { ArrowLeft, Check, AlertTriangle, Eye, Shield } from 'lucide-react';
+import { Logo } from '@/components/Logo';
+import { ArrowLeft, Check, AlertTriangle, Eye } from 'lucide-react';
 
 export default function BrandingStudioPage() {
   const [primaryColor, setPrimaryColor] = useState('#DC2626');
@@ -31,8 +32,9 @@ export default function BrandingStudioPage() {
             </Button>
           </Link>
           <div className="flex items-center gap-2">
-            <Shield className="w-5 h-5 text-red-500" />
-            <h1 className="text-base font-bold text-white">Dark Space White-Label Studio</h1>
+            <Logo size="sm" />
+            <span className="text-zinc-600 font-mono">/</span>
+            <h1 className="text-sm font-bold text-white">Theme & Brand Tokens</h1>
           </div>
         </div>
 
@@ -145,9 +147,7 @@ export default function BrandingStudioPage() {
             }}
           >
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-              <span className="font-extrabold text-base tracking-wide text-white">
-                DARK SPACE <span style={{ color: primaryColor }}>SECURITY</span>
-              </span>
+              <Logo size="sm" />
               <button
                 className="px-4 py-1.5 text-xs font-bold rounded-md"
                 style={{ backgroundColor: primaryColor, color: contrastColor }}

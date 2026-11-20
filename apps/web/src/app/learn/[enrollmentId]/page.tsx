@@ -82,9 +82,11 @@ export default function CoursePlayerPage() {
           </Link>
 
           <div className="flex items-center gap-3">
-            <div className="w-7 h-7 rounded bg-red-950/80 flex items-center justify-center border border-red-800/40">
-              <Terminal className="w-4 h-4 text-red-400" />
-            </div>
+            <img
+              src="/logo-mark.png"
+              alt="Logo"
+              className="w-5 h-7 object-contain drop-shadow-[0_0_6px_rgba(255,0,0,0.5)]"
+            />
             <div>
               <h1 className="text-sm font-bold text-white flex items-center gap-2">
                 <span>Ethical Hacking & Web Penetration Testing (VAPT)</span>
