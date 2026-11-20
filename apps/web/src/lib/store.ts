@@ -1030,6 +1030,8 @@ export async function createLiveSession(sessionData: Omit<LiveSession, 'id' | 'c
   return newSession;
 }
 
+export const scheduleLiveSession = createLiveSession;
+
 export async function updateLiveSessionStatus(id: string, status: 'live' | 'upcoming' | 'completed'): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
@@ -1042,13 +1044,52 @@ export async function updateLiveSessionStatus(id: string, status: 'live' | 'upco
   }
 }
 
-export async function deleteLiveSession(id: string): Promise<void> {
+export async function deleteCourseModule(moduleId: string): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY_MODULES);
+    if (stored) {
+      const list: CourseModuleItem[] = JSON.parse(stored);
+      const updated = list.filter((m) => m.id !== moduleId);
+      localStorage.setItem(LOCAL_STORAGE_KEY_MODULES, JSON.stringify(updated));
+      window.dispatchEvent(new CustomEvent('dss-course-modules-updated'));
+    }
+  } catch (err) {
+    console.error('Failed deleting module', err);
+  }
+}
+
+export async function deleteLiveSession(idOrCourseId: string): Promise<void> {
   if (typeof window === 'undefined') return;
   try {
     const list = await fetchLiveSessions();
-    const updated = list.filter((s) => s.id !== id);
+    const sessionToDelete = list.find((s) => s.id === idOrCourseId || s.courseId === idOrCourseId);
+    const updated = list.filter((s) => s.id !== idOrCourseId && s.courseId !== idOrCourseId);
     localStorage.setItem(LOCAL_STORAGE_KEY_LIVE_SESSIONS, JSON.stringify(updated));
+
+    // Also remove from custom modules if present
+    try {
+      const stored = localStorage.getItem(LOCAL_STORAGE_KEY_MODULES);
+      if (stored) {
+        const mods: CourseModuleItem[] = JSON.parse(stored);
+        const filteredMods = mods.filter((m) => {
+          if (m.type !== 'live') return true;
+          if (m.courseId === idOrCourseId) return false;
+          if (sessionToDelete && (m.courseId === sessionToDelete.courseId || m.title.includes(sessionToDelete.topic))) return false;
+          return true;
+        });
+        localStorage.setItem(LOCAL_STORAGE_KEY_MODULES, JSON.stringify(filteredMods));
+      }
+
+      if (sessionToDelete) {
+        localStorage.removeItem(`dss_live_room_state_${sessionToDelete.courseId}`);
+      } else {
+        localStorage.removeItem(`dss_live_room_state_${idOrCourseId}`);
+      }
+    } catch {}
+
     window.dispatchEvent(new CustomEvent('dss-live-sessions-updated'));
+    window.dispatchEvent(new CustomEvent('dss-course-modules-updated'));
   } catch (err) {
     console.error('Failed deleting live session', err);
   }

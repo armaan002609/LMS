@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@lms/ui';
 import { LiveSession } from '@/lib/types';
-import { fetchLiveSessions } from '@/lib/store';
+import { fetchLiveSessions, deleteLiveSession } from '@/lib/store';
 import { useAuth } from '@/lib/auth-context';
 import { ScheduleLiveClassModal } from '@/components/ScheduleLiveClassModal';
 import {
@@ -14,6 +14,7 @@ import {
   Clock,
   Plus,
   GraduationCap,
+  Trash2,
 } from 'lucide-react';
 
 export function LiveSessionHUD() {
@@ -24,6 +25,13 @@ export function LiveSessionHUD() {
   const loadSessions = async () => {
     const list = await fetchLiveSessions();
     setSessions(list);
+  };
+
+  const handleDeleteSession = async (sessionId: string, sessionTopic: string) => {
+    if (confirm(`Are you sure you want to delete the live class "${sessionTopic}"? This will cancel the class for all learners.`)) {
+      await deleteLiveSession(sessionId);
+      await loadSessions();
+    }
   };
 
   useEffect(() => {
@@ -135,12 +143,21 @@ export function LiveSessionHUD() {
               </Link>
 
               {canManage && (
-                <button
-                  onClick={() => setIsScheduleModalOpen(true)}
-                  className="text-[11px] text-zinc-400 hover:text-white font-mono text-center hover:underline pt-1"
-                >
-                  + Assign Another Class
-                </button>
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <button
+                    onClick={() => setIsScheduleModalOpen(true)}
+                    className="text-[11px] text-zinc-400 hover:text-white font-mono hover:underline"
+                  >
+                    + Assign Another Class
+                  </button>
+                  <button
+                    onClick={() => handleDeleteSession(liveSession.id, liveSession.topic)}
+                    className="text-[11px] text-red-400 hover:text-red-300 font-mono hover:underline flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Delete Class</span>
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -180,7 +197,7 @@ export function LiveSessionHUD() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
             <Link href={`/learn/${upcomingSession.courseId}?tab=live`}>
               <Button
                 variant="primary"
@@ -193,15 +210,28 @@ export function LiveSessionHUD() {
             </Link>
 
             {canManage && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setIsScheduleModalOpen(true)}
-                className="bg-[#12121A] border-zinc-800 text-xs text-zinc-300 hover:text-white gap-1"
-              >
-                <Plus className="w-3.5 h-3.5 text-red-400" />
-                <span>Assign Class</span>
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setIsScheduleModalOpen(true)}
+                  className="bg-[#12121A] border-zinc-800 text-xs text-zinc-300 hover:text-white gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5 text-red-400" />
+                  <span>Assign Class</span>
+                </Button>
+
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handleDeleteSession(upcomingSession.id, upcomingSession.topic)}
+                  className="bg-[#12121A] border border-zinc-800 text-xs text-red-400 hover:text-red-300 hover:bg-red-950/40 gap-1 font-mono"
+                  title="Delete scheduled live class"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete</span>
+                </Button>
+              </>
             )}
           </div>
         </div>

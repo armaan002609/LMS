@@ -10,6 +10,8 @@ import {
   fetchCourseModules,
   fetchCourseNotes,
   updateCourseProgress,
+  deleteLiveSession,
+  deleteCourseModule,
 } from '@/lib/store';
 import { Course, CourseModuleItem, CourseResourceNote } from '@/lib/types';
 import { getCourseLabTemplate, CourseLabTemplate } from '@/lib/course-content';
@@ -51,6 +53,7 @@ import {
   UserCheck,
   UserX,
   Shield,
+  Trash2,
 } from 'lucide-react';
 
 interface RemotePeer {
@@ -1071,6 +1074,32 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     setIsInLiveRoom(false);
   };
 
+  const handleDeleteLiveClass = async () => {
+    if (confirm(`Are you sure you want to end and delete this live class session? This will close the broadcast and delete the session for all learners.`)) {
+      if (broadcastChannelRef.current) {
+        try {
+          broadcastChannelRef.current.postMessage({
+            type: 'peer-leave',
+            from: localPeerIdRef.current,
+          });
+        } catch {}
+      }
+      await deleteLiveSession(params.enrollmentId);
+      handleLeaveRoom();
+      const updated = await fetchCourseModules(params.enrollmentId, courseTitle, course?.category);
+      setCourseModules(updated);
+    }
+  };
+
+  const handleDeleteLiveModule = async (mod: CourseModuleItem) => {
+    if (confirm(`Delete live class "${mod.title}" from this course?`)) {
+      await deleteLiveSession(params.enrollmentId);
+      await deleteCourseModule(mod.id);
+      const updated = await fetchCourseModules(params.enrollmentId, courseTitle, course?.category);
+      setCourseModules(updated);
+    }
+  };
+
   const handleCopyMeetingLink = () => {
     if (typeof window !== 'undefined') {
       navigator.clipboard.writeText(window.location.href);
@@ -1228,9 +1257,24 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                     {getModIcon()}
                     <span className="truncate">{mod.title}</span>
                   </div>
-                  <span className={`text-[10px] font-bold shrink-0 ml-1.5 ${mod.duration === 'LIVE' || mod.duration === 'LIVE NOW' ? 'text-red-400 animate-pulse' : 'text-zinc-400'}`}>
-                    {mod.duration || '40 Min'}
-                  </span>
+                  <div className="flex items-center gap-1.5 shrink-0 ml-1.5">
+                    <span className={`text-[10px] font-bold ${mod.duration === 'LIVE' || mod.duration === 'LIVE NOW' ? 'text-red-400 animate-pulse' : 'text-zinc-400'}`}>
+                      {mod.duration || '40 Min'}
+                    </span>
+                    {isInstructorOrAdmin && mod.type === 'live' && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteLiveModule(mod);
+                        }}
+                        title="Delete this live class module"
+                        className="p-1 rounded text-zinc-500 hover:text-red-400 hover:bg-red-950/60 transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -1892,12 +1936,25 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                         <button
                           type="button"
                           onClick={handleLeaveRoom}
-                          className="px-3.5 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-red-950 transition-all"
+                          className="px-3.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-zinc-950 transition-all"
                           title="Leave Live Studio"
                         >
                           <PhoneOff className="w-3.5 h-3.5" />
                           <span>Leave</span>
                         </button>
+
+                        {/* End & Delete Class Button (Host / Admin Only) */}
+                        {isInstructorOrAdmin && (
+                          <button
+                            type="button"
+                            onClick={handleDeleteLiveClass}
+                            className="px-3.5 py-1.5 rounded-lg bg-red-600/90 hover:bg-red-600 text-white text-xs font-mono font-bold flex items-center gap-1.5 shadow-md shadow-red-950 transition-all"
+                            title="End and delete this live class session for all learners"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete Class</span>
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -1927,21 +1984,35 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                           ? 'You are the Instructor and Host of this live masterclass. Launch studio to begin broadcasting.'
                           : `Live studio is active for ${courseTitle}. Join the interactive voice, video, screen share, and chat room.`}
                       </p>
-                      <Button
-                        variant="primary"
-                        size="md"
-                        onClick={handleRequestJoinRoom}
-                        className="mt-4 bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 font-bold text-xs gap-2 shadow-lg shadow-red-950/50 hover:scale-105 transition-all"
-                      >
-                        <Radio className="w-4 h-4" />
-                        <span>
-                          {user?.role === 'admin'
-                            ? '🛡️ Join Live Class as Admin (Direct Access) →'
-                            : user?.role === 'instructor'
-                            ? '🚀 Enter Live Studio as Host →'
-                            : '🚀 Join Live Class (1-Click) →'}
-                        </span>
-                      </Button>
+                      <div className="flex items-center gap-2.5 mt-4 flex-wrap justify-center">
+                        <Button
+                          variant="primary"
+                          size="md"
+                          onClick={handleRequestJoinRoom}
+                          className="bg-gradient-to-r from-red-600 to-red-800 hover:from-red-500 font-bold text-xs gap-2 shadow-lg shadow-red-950/50 hover:scale-105 transition-all"
+                        >
+                          <Radio className="w-4 h-4" />
+                          <span>
+                            {user?.role === 'admin'
+                              ? '🛡️ Join Live Class as Admin (Direct Access) →'
+                              : user?.role === 'instructor'
+                              ? '🚀 Enter Live Studio as Host →'
+                              : '🚀 Join Live Class (1-Click) →'}
+                          </span>
+                        </Button>
+
+                        {isInstructorOrAdmin && (
+                          <Button
+                            variant="ghost"
+                            size="md"
+                            onClick={handleDeleteLiveClass}
+                            className="bg-red-950/40 border border-red-900/60 text-red-400 hover:bg-red-950/70 hover:text-white font-mono text-xs gap-1.5"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Delete Live Session</span>
+                          </Button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="p-4 bg-gradient-to-t from-black/90 to-transparent text-xs font-mono text-zinc-400 flex items-center justify-between">
