@@ -20,27 +20,35 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 const AUTH_STORAGE_KEY = 'dss_active_user_session';
+const TAB_STORAGE_KEY = 'dss_active_tab_session';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check local storage session and sync with live database
+    // Check session: prefer tab-isolated sessionStorage so multiple tabs can test Instructor & Learner simultaneously
     const loadSession = async () => {
       let currentUser: User | null = null;
       try {
-        const stored = localStorage.getItem(AUTH_STORAGE_KEY);
+        const tabStored = typeof window !== 'undefined' ? sessionStorage.getItem(TAB_STORAGE_KEY) : null;
+        const localStored = typeof window !== 'undefined' ? localStorage.getItem(AUTH_STORAGE_KEY) : null;
+        const stored = tabStored || localStored;
+
         if (stored) {
           const parsed = JSON.parse(stored);
           // If session was from old demo learner, purge it
           if (parsed.email === 'learner@darkspacesecurity.io' || parsed.name === 'Alex Mercer') {
+            sessionStorage.removeItem(TAB_STORAGE_KEY);
             localStorage.removeItem(AUTH_STORAGE_KEY);
             document.cookie = 'dss_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
             currentUser = null;
           } else {
             currentUser = parsed;
             setUser(parsed);
+            if (!tabStored && typeof window !== 'undefined') {
+              sessionStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(parsed));
+            }
           }
         }
       } catch (e) {
@@ -78,7 +86,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 assignedInstructorName: instName || undefined,
               };
               setUser(updated);
-              localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
+              sessionStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(updated));
               return;
             }
           } catch (err) {
@@ -98,7 +106,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               assignedInstructorName: matched.assignedInstructorName,
             };
             setUser(updated);
-            localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(updated));
+            sessionStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(updated));
           }
         } catch {}
       }
@@ -106,7 +114,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     loadSession();
 
-    const handleUsersUpdated = () => {
+    const handleUsersUpdated = (e?: StorageEvent | Event) => {
+      // If a storage event occurs from another tab, do not wipe this tab's distinct user session
+      if (e && 'key' in e && (e as StorageEvent).key === AUTH_STORAGE_KEY) {
+        const tabSession = sessionStorage.getItem(TAB_STORAGE_KEY);
+        if (tabSession) {
+          // Tab already has an explicit logged-in session, keep it
+          return;
+        }
+      }
       loadSession();
     };
 
@@ -153,6 +169,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               assignedInstructorName: instructorName || undefined,
             };
             setUser(loggedUser);
+            sessionStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(loggedUser));
             localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(loggedUser));
             document.cookie = `dss_role=${loggedUser.role}; path=/; max-age=86400; SameSite=Lax`;
             return { success: true, user: loggedUser };
@@ -178,6 +195,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           assignedInstructorName: matched.assignedInstructorName,
         };
         setUser(loggedUser);
+        sessionStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(loggedUser));
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(loggedUser));
         document.cookie = `dss_role=${loggedUser.role}; path=/; max-age=86400; SameSite=Lax`;
         return { success: true, user: loggedUser };
@@ -194,6 +212,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: new Date().toISOString(),
         };
         setUser(adminUser);
+        sessionStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(adminUser));
         localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(adminUser));
         document.cookie = `dss_role=admin; path=/; max-age=86400; SameSite=Lax`;
         return { success: true, user: adminUser };
@@ -207,6 +226,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = () => {
     setUser(null);
+    sessionStorage.removeItem(TAB_STORAGE_KEY);
     localStorage.removeItem(AUTH_STORAGE_KEY);
     document.cookie = 'dss_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     window.location.href = '/login';

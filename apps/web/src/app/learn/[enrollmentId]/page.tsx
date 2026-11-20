@@ -18,6 +18,7 @@ import { getCourseLabTemplate, CourseLabTemplate } from '@/lib/course-content';
 import { NotificationCenter } from '@/components/NotificationCenter';
 import { InstructorStudioModal } from '@/components/InstructorStudioModal';
 import { ScheduleLiveClassModal } from '@/components/ScheduleLiveClassModal';
+import { getSupabaseBrowserClient } from '@/lib/supabase';
 import {
   CheckCircle,
   ArrowLeft,
@@ -122,7 +123,11 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const peerConnectionsRef = React.useRef<{ [peerId: string]: RTCPeerConnection }>({});
   const broadcastChannelRef = React.useRef<BroadcastChannel | null>(null);
   const admissionChannelRef = React.useRef<BroadcastChannel | null>(null);
+  const sbChannelRef = React.useRef<any>(null);
+  const processedMessagesRef = React.useRef<Set<string>>(new Set());
   const localPeerIdRef = React.useRef<string>('');
+  const handlePeerMessageRef = React.useRef<((msg: any) => Promise<void>) | null>(null);
+  const handleAdmissionMessageRef = React.useRef<((msg: any) => void) | null>(null);
 
   // Video Player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -141,9 +146,26 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; sender: string; time: string; text: string; role?: string }>>([]);
   const [newChatInput, setNewChatInput] = useState('');
 
+  // Canonical room identifier (ensures instructor and learners always bind to the exact same room channel)
+  const canonicalRoomId = course?.id || (params.enrollmentId.startsWith('c0000000') ? params.enrollmentId : 'c0000000-0000-0000-0000-000000000101');
+
   const loadCourseData = async () => {
     const courses = await fetchCourses();
-    const matched = courses.find((c) => c.id === params.enrollmentId || c.slug === params.enrollmentId) || courses[0];
+    let matched = courses.find((c) => c.id === params.enrollmentId || c.slug === params.enrollmentId);
+    if (!matched) {
+      const supabase = getSupabaseBrowserClient();
+      if (supabase) {
+        try {
+          const { data: enroll } = await supabase.from('enrollments').select('course_id').eq('id', params.enrollmentId).single();
+          if (enroll?.course_id) {
+            matched = courses.find((c) => c.id === enroll.course_id);
+          }
+        } catch {}
+      }
+    }
+    if (!matched) {
+      matched = courses[0];
+    }
     if (matched) {
       setCourse(matched);
       const tmpl = getCourseLabTemplate(matched.title, matched.category, matched.targetLabIp);
@@ -171,18 +193,71 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
             setIsInLiveRoom(true);
           } else {
             try {
-              const current = localStorage.getItem(`dss_live_room_state_${params.enrollmentId}`);
+              const current = localStorage.getItem(`dss_live_room_state_${canonicalRoomId}`);
               const parsed = current ? JSON.parse(current) : {};
-              if (parsed.autoAdmitEveryone || (Array.isArray(parsed.admittedIds) && parsed.admittedIds.includes(user.id))) {
+              if (parsed.autoAdmitEveryone !== false || (Array.isArray(parsed.admittedIds) && parsed.admittedIds.includes(user.id))) {
                 setAdmissionStatus('admitted');
                 setIsInLiveRoom(true);
               }
-            } catch {}
+            } catch {
+              setAdmissionStatus('admitted');
+              setIsInLiveRoom(true);
+            }
           }
         }
       }
     }
-  }, [params.enrollmentId, user]);
+  }, [params.enrollmentId, user, canonicalRoomId]);
+
+  const isMessageProcessed = React.useCallback((msg: any): boolean => {
+    if (!msg || typeof msg !== 'object') return true;
+    const key =
+      msg.msgId ||
+      `${msg.type}_${msg.from || ''}_${msg.to || ''}_${msg.candidate?.candidate || (msg.sdp ? msg.sdp.type : '')}_${
+        msg.message?.id || ''
+      }_${msg.timestamp || ''}`;
+    if (processedMessagesRef.current.has(key)) {
+      return true;
+    }
+    processedMessagesRef.current.add(key);
+    if (processedMessagesRef.current.size > 300) {
+      const arr = Array.from(processedMessagesRef.current);
+      processedMessagesRef.current = new Set(arr.slice(150));
+    }
+    return false;
+  }, []);
+
+  const broadcastRoomMessage = React.useCallback(
+    (type: string, data: any) => {
+      const msgId = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const fullMsg = { type, msgId, timestamp: Date.now(), ...data };
+      processedMessagesRef.current.add(msgId);
+
+      // 1. BroadcastChannel local fast-path
+      try {
+        broadcastChannelRef.current?.postMessage(fullMsg);
+      } catch {}
+
+      // 2. Admission BroadcastChannel if applicable
+      try {
+        admissionChannelRef.current?.postMessage(fullMsg);
+      } catch {}
+
+      // 3. Supabase Realtime cloud broadcast (works across all browsers, incognito, networks)
+      if (sbChannelRef.current) {
+        try {
+          sbChannelRef.current.send({
+            type: 'broadcast',
+            event: type,
+            payload: fullMsg,
+          });
+        } catch (e) {
+          console.warn('Supabase Realtime broadcast error', e);
+        }
+      }
+    },
+    []
+  );
 
   const handleCommandSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -227,7 +302,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
   };
 
-  const chatStorageKey = `dss_live_chat_${params.enrollmentId}`;
+  const chatStorageKey = `dss_live_chat_${canonicalRoomId}`;
 
   // Load chat and sync across tabs
   useEffect(() => {
@@ -250,7 +325,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
 
     const handleChatBroadcast = (e: any) => {
-      if (e.detail?.courseId === params.enrollmentId && Array.isArray(e.detail?.messages)) {
+      if (e.detail?.courseId === canonicalRoomId && Array.isArray(e.detail?.messages)) {
         setChatMessages(e.detail.messages);
       }
     };
@@ -273,7 +348,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       window.removeEventListener('dss-live-chat-broadcast', handleChatBroadcast);
       window.removeEventListener('storage', handleStorageChange);
     };
-  }, [params.enrollmentId, chatStorageKey]);
+  }, [canonicalRoomId, chatStorageKey]);
 
   // Auto-scroll chat when messages update
   useEffect(() => {
@@ -297,7 +372,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
   }, [isScreenSharing]);
 
   // Room state key for admission & waiting queue
-  const roomStateKey = `dss_live_room_state_${params.enrollmentId}`;
+  const roomStateKey = `dss_live_room_state_${canonicalRoomId}`;
 
   const loadRoomState = React.useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -320,6 +395,48 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
   }, [roomStateKey]);
 
+  const handleAdmissionMessage = React.useCallback(
+    (data: any) => {
+      if (isMessageProcessed(data)) return;
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'learner-knocking' && data.learner) {
+        setWaitingList((prev) => {
+          if (prev.some((w) => w.id === data.learner.id)) return prev;
+          return [...prev, data.learner];
+        });
+      } else if (data.type === 'learner-admitted') {
+        if (user && user.id === data.learnerId) {
+          setAdmissionStatus('admitted');
+          setIsInLiveRoom(true);
+        }
+        setWaitingList((prev) => prev.filter((w) => w.id !== data.learnerId));
+        setAdmittedIds((prev) => Array.from(new Set([...prev, data.learnerId])));
+      } else if (data.type === 'learner-denied') {
+        if (user && user.id === data.learnerId) {
+          setAdmissionStatus('denied');
+        }
+        setWaitingList((prev) => prev.filter((w) => w.id !== data.learnerId));
+      } else if (data.type === 'all-admitted') {
+        if (user && user.role === 'learner') {
+          setAdmissionStatus('admitted');
+          setIsInLiveRoom(true);
+        }
+        setWaitingList([]);
+        if (Array.isArray(data.learnerIds)) {
+          setAdmittedIds((prev) => Array.from(new Set([...prev, ...data.learnerIds])));
+        }
+      } else if (data.type === 'auto-admit-changed') {
+        setAutoAdmitEveryone(data.autoAdmit);
+        if (data.autoAdmit && user && user.role === 'learner' && admissionStatus === 'waiting') {
+          setAdmissionStatus('admitted');
+          setIsInLiveRoom(true);
+        }
+      }
+    },
+    [isMessageProcessed, user, admissionStatus]
+  );
+
   useEffect(() => {
     loadRoomState();
 
@@ -336,60 +453,107 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     window.addEventListener('dss-room-state-updated', handleRoomStateEvent);
     window.addEventListener('storage', handleStorageEvent);
 
+    return () => {
+      window.removeEventListener('dss-room-state-updated', handleRoomStateEvent);
+      window.removeEventListener('storage', handleStorageEvent);
+    };
+  }, [roomStateKey, loadRoomState]);
+
+  // Keep handleAdmissionMessage ref in sync
+  useEffect(() => {
+    handleAdmissionMessageRef.current = handleAdmissionMessage;
+  }, [handleAdmissionMessage]);
+
+  // 1. Room-Wide Cloud (Supabase Realtime) and Local BroadcastChannel Signaling
+  // Stays permanently connected for the canonical room ID so knocking, admission,
+  // chat, and presence signals work across all browser windows, incognito, and devices.
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    let sbChannel: any = null;
+    let webrtcChannel: BroadcastChannel | null = null;
     let admChannel: BroadcastChannel | null = null;
+
     try {
-      admChannel = new BroadcastChannel(`dss_adm_${params.enrollmentId}`);
-      admissionChannelRef.current = admChannel;
-
-      admChannel.onmessage = (event) => {
-        const data = event.data;
-        if (!data || typeof data !== 'object') return;
-
-        if (data.type === 'learner-knocking' && data.learner) {
-          setWaitingList((prev) => {
-            if (prev.some((w) => w.id === data.learner.id)) return prev;
-            return [...prev, data.learner];
-          });
-        } else if (data.type === 'learner-admitted') {
-          if (user && user.id === data.learnerId) {
-            setAdmissionStatus('admitted');
-            setIsInLiveRoom(true);
-          }
-          setWaitingList((prev) => prev.filter((w) => w.id !== data.learnerId));
-          setAdmittedIds((prev) => Array.from(new Set([...prev, data.learnerId])));
-        } else if (data.type === 'learner-denied') {
-          if (user && user.id === data.learnerId) {
-            setAdmissionStatus('denied');
-          }
-          setWaitingList((prev) => prev.filter((w) => w.id !== data.learnerId));
-        } else if (data.type === 'all-admitted') {
-          if (user && user.role === 'learner') {
-            setAdmissionStatus('admitted');
-            setIsInLiveRoom(true);
-          }
-          setWaitingList([]);
-          if (Array.isArray(data.learnerIds)) {
-            setAdmittedIds((prev) => Array.from(new Set([...prev, ...data.learnerIds])));
-          }
-        } else if (data.type === 'auto-admit-changed') {
-          setAutoAdmitEveryone(data.autoAdmit);
-          if (data.autoAdmit && user && user.role === 'learner' && admissionStatus === 'waiting') {
-            setAdmissionStatus('admitted');
-            setIsInLiveRoom(true);
-          }
+      webrtcChannel = new BroadcastChannel(`dss_webrtc_p2p_${canonicalRoomId}`);
+      broadcastChannelRef.current = webrtcChannel;
+      webrtcChannel.onmessage = async (event) => {
+        if (handlePeerMessageRef.current) {
+          await handlePeerMessageRef.current(event.data);
         }
       };
     } catch {}
 
+    try {
+      admChannel = new BroadcastChannel(`dss_adm_${canonicalRoomId}`);
+      admissionChannelRef.current = admChannel;
+      admChannel.onmessage = (event) => {
+        if (handleAdmissionMessageRef.current) {
+          handleAdmissionMessageRef.current(event.data);
+        }
+      };
+    } catch {}
+
+    if (supabase) {
+      try {
+        sbChannel = supabase.channel(`dss_cloud_live_${canonicalRoomId}`, {
+          config: { broadcast: { self: false } },
+        });
+        sbChannelRef.current = sbChannel;
+
+        sbChannel
+          .on('broadcast', { event: 'peer-presence' }, (e: any) => handlePeerMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'track-state-changed' }, (e: any) => handlePeerMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'webrtc-offer' }, (e: any) => handlePeerMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'webrtc-answer' }, (e: any) => handlePeerMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'webrtc-candidate' }, (e: any) => handlePeerMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'peer-leave' }, (e: any) => handlePeerMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'learner-knocking' }, (e: any) => handleAdmissionMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'learner-admitted' }, (e: any) => handleAdmissionMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'learner-denied' }, (e: any) => handleAdmissionMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'all-admitted' }, (e: any) => handleAdmissionMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'auto-admit-changed' }, (e: any) => handleAdmissionMessageRef.current?.(e.payload))
+          .on('broadcast', { event: 'chat-message' }, (e: any) => {
+            const data = e.payload;
+            if (isMessageProcessed(data)) return;
+            if (data?.message) {
+              setChatMessages((prev) => {
+                if (prev.some((m) => m.id === data.message.id)) return prev;
+                const updated = [...prev, data.message];
+                try {
+                  localStorage.setItem(chatStorageKey, JSON.stringify(updated));
+                } catch {}
+                return updated;
+              });
+            }
+          })
+          .on('broadcast', { event: 'session-ended' }, (e: any) => {
+            if (isMessageProcessed(e.payload)) return;
+            handleLeaveRoom();
+            alert('The live class session was ended by the instructor.');
+          })
+          .subscribe();
+      } catch (err) {
+        console.warn('Supabase Realtime setup warning:', err);
+      }
+    }
+
     return () => {
-      window.removeEventListener('dss-room-state-updated', handleRoomStateEvent);
-      window.removeEventListener('storage', handleStorageEvent);
+      if (webrtcChannel) {
+        webrtcChannel.close();
+        broadcastChannelRef.current = null;
+      }
       if (admChannel) {
         admChannel.close();
         admissionChannelRef.current = null;
       }
+      if (sbChannel && supabase) {
+        try {
+          supabase.removeChannel(sbChannel);
+        } catch {}
+        sbChannelRef.current = null;
+      }
     };
-  }, [params.enrollmentId, roomStateKey, user, admissionStatus, loadRoomState]);
+  }, [canonicalRoomId, chatStorageKey, isMessageProcessed]);
 
   // Auto-admit learner if policy allows or previously admitted
   useEffect(() => {
@@ -401,191 +565,278 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
     }
   }, [autoAdmitEveryone, admittedIds, admissionStatus, user]);
 
-  // Two-Way WebRTC Audio & Video Peer Connection via BroadcastChannel
+  // 2. Active In-Room WebRTC Peer Session (Two-Way Video & Audio)
+  // Activates when the user is admitted and inside the live classroom.
   useEffect(() => {
     if (!isInLiveRoom || admissionStatus !== 'admitted') return;
 
     const myPeerId = `peer_${user?.id || 'anon'}_${Math.random().toString(36).substring(2, 7)}`;
     localPeerIdRef.current = myPeerId;
 
-    let channel: BroadcastChannel | null = null;
-    try {
-      channel = new BroadcastChannel(`dss_webrtc_p2p_${params.enrollmentId}`);
-      broadcastChannelRef.current = channel;
+    const setupPeerConnection = (
+      targetPeerId: string,
+      targetUserId: string,
+      targetName: string,
+      targetRole: string,
+      isInitiator: boolean
+    ) => {
+      if (peerConnectionsRef.current[targetPeerId]) {
+        return peerConnectionsRef.current[targetPeerId];
+      }
 
-      const setupPeerConnection = (targetPeerId: string, targetUserId: string, targetName: string, targetRole: string, isInitiator: boolean) => {
-        if (peerConnectionsRef.current[targetPeerId]) {
-          return peerConnectionsRef.current[targetPeerId];
-        }
+      const pc = new RTCPeerConnection({
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+          { urls: 'stun:stun3.l.google.com:19302' },
+        ],
+      });
 
-        const pc = new RTCPeerConnection({
-          iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' },
-          ],
-        });
+      // Upfront sendrecv transceivers for audio and video
+      try {
+        pc.addTransceiver('video', { direction: 'sendrecv' });
+        pc.addTransceiver('audio', { direction: 'sendrecv' });
+      } catch {}
 
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach((track) => {
-            pc.addTrack(track, mediaStreamRef.current!);
-          });
-        }
-
-        pc.ontrack = (event) => {
-          const stream = event.streams[0] || new MediaStream([event.track]);
-          setRemotePeers((prev) => {
-            const exists = prev.find((p) => p.peerId === targetPeerId);
-            if (exists) {
-              return prev.map((p) => (p.peerId === targetPeerId ? { ...p, stream } : p));
+      // Attach existing media tracks if active
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach((track) => {
+          try {
+            const sender = pc.getSenders().find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind);
+            if (sender) {
+              sender.replaceTrack(track).catch(() => {});
+            } else {
+              pc.addTrack(track, mediaStreamRef.current!);
             }
-            return [
-              ...prev,
-              {
-                peerId: targetPeerId,
-                userId: targetUserId,
-                name: targetName,
-                role: targetRole,
-                stream,
-                isMicOn: true,
-                isCameraOn: true,
-                isScreenSharing: false,
-                isMutedLocally: false,
-              },
-            ];
-          });
-        };
+          } catch {}
+        });
+      }
 
-        pc.onicecandidate = (event) => {
-          if (event.candidate && broadcastChannelRef.current) {
-            broadcastChannelRef.current.postMessage({
-              type: 'webrtc-candidate',
-              from: myPeerId,
-              to: targetPeerId,
-              candidate: event.candidate,
-            });
+      if (screenStreamRef.current) {
+        screenStreamRef.current.getTracks().forEach((track) => {
+          try {
+            pc.addTrack(track, screenStreamRef.current!);
+          } catch {}
+        });
+      }
+
+      pc.ontrack = (event) => {
+        const stream = event.streams[0] || new MediaStream([event.track]);
+        setRemotePeers((prev) => {
+          const exists = prev.find((p) => p.peerId === targetPeerId);
+          if (exists) {
+            let activeStream = exists.stream;
+            if (!activeStream) {
+              activeStream = stream;
+            } else if (!activeStream.getTracks().some((t) => t.id === event.track.id)) {
+              activeStream.addTrack(event.track);
+            }
+            const updatedStream = new MediaStream(activeStream.getTracks());
+            return prev.map((p) => (p.peerId === targetPeerId ? { ...p, stream: updatedStream } : p));
           }
-        };
-
-        peerConnectionsRef.current[targetPeerId] = pc;
-
-        if (isInitiator) {
-          pc.createOffer().then((offer) => {
-            return pc.setLocalDescription(offer).then(() => {
-              channel?.postMessage({
-                type: 'webrtc-offer',
-                from: myPeerId,
-                to: targetPeerId,
-                userId: user?.id,
-                name: user?.name || user?.email?.split('@')[0] || 'User',
-                role: user?.role || 'learner',
-                sdp: offer,
-              });
-            });
-          }).catch((err) => console.error('Error creating WebRTC offer:', err));
-        }
-
-        return pc;
+          return [
+            ...prev,
+            {
+              peerId: targetPeerId,
+              userId: targetUserId,
+              name: targetName,
+              role: targetRole,
+              stream,
+              isMicOn: true,
+              isCameraOn: true,
+              isScreenSharing: false,
+              isMutedLocally: false,
+            },
+          ];
+        });
       };
 
-      channel.onmessage = async (event) => {
-        const msg = event.data;
-        if (!msg || typeof msg !== 'object') return;
-        if (msg.from === myPeerId) return;
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          broadcastRoomMessage('webrtc-candidate', {
+            from: myPeerId,
+            to: targetPeerId,
+            candidate: event.candidate,
+          });
+        }
+      };
 
-        if (msg.type === 'peer-presence') {
-          const isInitiator = myPeerId > msg.from;
-          setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, isInitiator);
+      peerConnectionsRef.current[targetPeerId] = pc;
 
-          if (msg.broadcast) {
-            channel?.postMessage({
-              type: 'peer-presence',
+      if (isInitiator) {
+        pc.createOffer()
+          .then((offer) => pc.setLocalDescription(offer).then(() => offer))
+          .then((offer) => {
+            broadcastRoomMessage('webrtc-offer', {
               from: myPeerId,
+              to: targetPeerId,
               userId: user?.id,
               name: user?.name || user?.email?.split('@')[0] || 'User',
               role: user?.role || 'learner',
-              broadcast: false,
+              sdp: offer,
             });
+          })
+          .catch((err) => console.error('Error creating WebRTC offer:', err));
+      }
+
+      return pc;
+    };
+
+    const handlePeerMessage = async (msg: any) => {
+      if (!msg || typeof msg !== 'object') return;
+      if (msg.from === myPeerId) return;
+      if (isMessageProcessed(msg)) return;
+
+      if (msg.type === 'peer-presence') {
+        const isInitiator = myPeerId > msg.from;
+        setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, isInitiator);
+
+        setRemotePeers((prev) => {
+          const existing = prev.find((p) => p.peerId === msg.from);
+          if (existing) {
+            return prev.map((p) =>
+              p.peerId === msg.from
+                ? {
+                    ...p,
+                    name: msg.name || p.name,
+                    role: msg.role || p.role,
+                    isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : p.isCameraOn,
+                    isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : p.isMicOn,
+                    isScreenSharing: typeof msg.isScreenSharing === 'boolean' ? msg.isScreenSharing : p.isScreenSharing,
+                  }
+                : p
+            );
           }
-        } else if (msg.type === 'webrtc-offer' && msg.to === myPeerId) {
-          const pc = setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, false);
+          return [
+            ...prev,
+            {
+              peerId: msg.from,
+              userId: msg.userId,
+              name: msg.name,
+              role: msg.role,
+              isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : true,
+              isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : true,
+              isScreenSharing: Boolean(msg.isScreenSharing),
+              isMutedLocally: false,
+            },
+          ];
+        });
+
+        if (msg.broadcast) {
+          broadcastRoomMessage('peer-presence', {
+            from: myPeerId,
+            userId: user?.id,
+            name: user?.name || user?.email?.split('@')[0] || 'User',
+            role: user?.role || 'learner',
+            broadcast: false,
+            isCameraOn,
+            isMicOn,
+            isScreenSharing,
+          });
+        }
+      } else if (msg.type === 'track-state-changed') {
+        setRemotePeers((prev) =>
+          prev.map((p) =>
+            p.peerId === msg.from || p.peerId === msg.peerId
+              ? {
+                  ...p,
+                  isCameraOn: typeof msg.isCameraOn === 'boolean' ? msg.isCameraOn : p.isCameraOn,
+                  isMicOn: typeof msg.isMicOn === 'boolean' ? msg.isMicOn : p.isMicOn,
+                  isScreenSharing: typeof msg.isScreenSharing === 'boolean' ? msg.isScreenSharing : p.isScreenSharing,
+                }
+              : p
+          )
+        );
+      } else if (msg.type === 'webrtc-offer' && msg.to === myPeerId) {
+        const pc = setupPeerConnection(msg.from, msg.userId, msg.name, msg.role, false);
+        try {
+          await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          broadcastRoomMessage('webrtc-answer', {
+            from: myPeerId,
+            to: msg.from,
+            sdp: answer,
+          });
+        } catch (e) {
+          console.error('Error handling WebRTC offer:', e);
+        }
+      } else if (msg.type === 'webrtc-answer' && msg.to === myPeerId) {
+        const pc = peerConnectionsRef.current[msg.from];
+        if (pc) {
           try {
             await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            channel?.postMessage({
-              type: 'webrtc-answer',
-              from: myPeerId,
-              to: msg.from,
-              sdp: answer,
-            });
           } catch (e) {
-            console.error('Error handling WebRTC offer:', e);
+            console.error('Error handling WebRTC answer:', e);
           }
-        } else if (msg.type === 'webrtc-answer' && msg.to === myPeerId) {
-          const pc = peerConnectionsRef.current[msg.from];
-          if (pc) {
-            try {
-              await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-            } catch (e) {
-              console.error('Error handling WebRTC answer:', e);
-            }
-          }
-        } else if (msg.type === 'webrtc-candidate' && msg.to === myPeerId) {
-          const pc = peerConnectionsRef.current[msg.from];
-          if (pc && msg.candidate) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-            } catch (e) {
-              console.error('Error adding ICE candidate:', e);
-            }
-          }
-        } else if (msg.type === 'peer-leave') {
-          const pc = peerConnectionsRef.current[msg.from];
-          if (pc) {
-            pc.close();
-            delete peerConnectionsRef.current[msg.from];
-          }
-          setRemotePeers((prev) => prev.filter((p) => p.peerId !== msg.from));
         }
-      };
+      } else if (msg.type === 'webrtc-candidate' && msg.to === myPeerId) {
+        const pc = peerConnectionsRef.current[msg.from];
+        if (pc && msg.candidate) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          } catch (e) {
+            console.error('Error adding ICE candidate:', e);
+          }
+        }
+      } else if (msg.type === 'peer-leave') {
+        const pc = peerConnectionsRef.current[msg.from];
+        if (pc) {
+          try {
+            pc.close();
+          } catch {}
+          delete peerConnectionsRef.current[msg.from];
+        }
+        setRemotePeers((prev) => prev.filter((p) => p.peerId !== msg.from));
+      }
+    };
 
-      channel.postMessage({
-        type: 'peer-presence',
-        from: myPeerId,
-        userId: user?.id,
-        name: user?.name || user?.email?.split('@')[0] || 'User',
-        role: user?.role || 'learner',
-        broadcast: true,
-      });
-    } catch {}
+    handlePeerMessageRef.current = handlePeerMessage;
+
+    // Announce presence across both Supabase Realtime and local BroadcastChannel
+    broadcastRoomMessage('peer-presence', {
+      from: myPeerId,
+      userId: user?.id,
+      name: user?.name || user?.email?.split('@')[0] || 'User',
+      role: user?.role || 'learner',
+      broadcast: true,
+      isCameraOn,
+      isMicOn,
+      isScreenSharing,
+    });
 
     return () => {
-      if (channel) {
-        channel.postMessage({
-          type: 'peer-leave',
-          from: myPeerId,
-        });
-        Object.values(peerConnectionsRef.current).forEach((pc) => pc.close());
-        peerConnectionsRef.current = {};
-        channel.close();
-        broadcastChannelRef.current = null;
-      }
+      broadcastRoomMessage('peer-leave', {
+        from: myPeerId,
+      });
+      Object.values(peerConnectionsRef.current).forEach((pc) => {
+        try {
+          pc.close();
+        } catch {}
+      });
+      peerConnectionsRef.current = {};
+      handlePeerMessageRef.current = null;
       setRemotePeers([]);
     };
-  }, [isInLiveRoom, admissionStatus, params.enrollmentId, user]);
+  }, [isInLiveRoom, admissionStatus, canonicalRoomId, user, isMessageProcessed, broadcastRoomMessage]);
 
   // Synchronize local tracks to peer connections
   const syncLocalTracksToPeers = (stream: MediaStream | null) => {
     Object.values(peerConnectionsRef.current).forEach((pc) => {
-      if (stream) {
-        stream.getTracks().forEach((track) => {
-          const sender = pc.getSenders().find((s) => s.track?.kind === track.kind);
-          if (sender) {
-            sender.replaceTrack(track);
-          } else {
-            pc.addTrack(track, stream);
-          }
-        });
+      try {
+        if (stream) {
+          stream.getTracks().forEach((track) => {
+            const sender = pc.getSenders().find((s) => s.track?.kind === track.kind || (s as any).kind === track.kind);
+            if (sender) {
+              sender.replaceTrack(track).catch(() => {});
+            } else {
+              pc.addTrack(track, stream);
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Error syncing tracks to peer:', e);
       }
     });
   };
@@ -642,8 +893,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       return updated;
     });
 
-    admissionChannelRef.current?.postMessage({
-      type: 'learner-knocking',
+    broadcastRoomMessage('learner-knocking', {
       learner: knockEntry,
     });
   };
@@ -669,8 +919,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         return updatedAdmitted;
       });
 
-      admissionChannelRef.current?.postMessage({
-        type: 'learner-admitted',
+      broadcastRoomMessage('learner-admitted', {
         learnerId,
       });
 
@@ -691,8 +940,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
       } catch {}
 
-      admissionChannelRef.current?.postMessage({
-        type: 'learner-denied',
+      broadcastRoomMessage('learner-denied', {
         learnerId,
       });
 
@@ -721,8 +969,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       return updatedAdmitted;
     });
 
-    admissionChannelRef.current?.postMessage({
-      type: 'all-admitted',
+    broadcastRoomMessage('all-admitted', {
       learnerIds: allWaitingIds,
     });
   };
@@ -748,8 +995,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       window.dispatchEvent(new CustomEvent('dss-room-state-updated'));
     } catch {}
 
-    admissionChannelRef.current?.postMessage({
-      type: 'auto-admit-changed',
+    broadcastRoomMessage('auto-admit-changed', {
       autoAdmit: nextVal,
     });
   };
@@ -815,7 +1061,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           localStorage.setItem(chatStorageKey, JSON.stringify(updated));
           window.dispatchEvent(
             new CustomEvent('dss-live-chat-broadcast', {
-              detail: { courseId: params.enrollmentId, messages: updated },
+              detail: { courseId: canonicalRoomId, messages: updated },
             })
           );
         } catch (e) {
@@ -823,6 +1069,10 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         }
       }
       return updated;
+    });
+
+    broadcastRoomMessage('chat-message', {
+      message: newMsg,
     });
   };
 
@@ -860,6 +1110,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       }
       setIsCameraOn(false);
       syncLocalTracksToPeers(mediaStreamRef.current);
+      broadcastRoomMessage('track-state-changed', {
+        from: localPeerIdRef.current,
+        peerId: localPeerIdRef.current,
+        isCameraOn: false,
+        isMicOn,
+        isScreenSharing,
+      });
     } else {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -877,6 +1134,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           mediaStreamRef.current.addTrack(videoTrack);
           videoTrack.onended = () => {
             setIsCameraOn(false);
+            broadcastRoomMessage('track-state-changed', {
+              from: localPeerIdRef.current,
+              peerId: localPeerIdRef.current,
+              isCameraOn: false,
+              isMicOn,
+              isScreenSharing,
+            });
           };
         }
 
@@ -887,6 +1151,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
         setIsCameraOn(true);
         syncLocalTracksToPeers(mediaStreamRef.current);
+        broadcastRoomMessage('track-state-changed', {
+          from: localPeerIdRef.current,
+          peerId: localPeerIdRef.current,
+          isCameraOn: true,
+          isMicOn,
+          isScreenSharing,
+        });
       } catch (err: any) {
         console.error('Camera access failed:', err);
         setDeviceError(
@@ -920,6 +1191,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       setMicLevel(0);
       setIsMicOn(false);
       syncLocalTracksToPeers(mediaStreamRef.current);
+      broadcastRoomMessage('track-state-changed', {
+        from: localPeerIdRef.current,
+        peerId: localPeerIdRef.current,
+        isCameraOn,
+        isMicOn: false,
+        isScreenSharing,
+      });
     } else {
       try {
         if (!navigator.mediaDevices?.getUserMedia) {
@@ -936,6 +1214,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
           audioTrack.onended = () => {
             setIsMicOn(false);
             setMicLevel(0);
+            broadcastRoomMessage('track-state-changed', {
+              from: localPeerIdRef.current,
+              peerId: localPeerIdRef.current,
+              isCameraOn,
+              isMicOn: false,
+              isScreenSharing,
+            });
           };
         }
 
@@ -972,6 +1257,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
         setIsMicOn(true);
         syncLocalTracksToPeers(mediaStreamRef.current);
+        broadcastRoomMessage('track-state-changed', {
+          from: localPeerIdRef.current,
+          peerId: localPeerIdRef.current,
+          isCameraOn,
+          isMicOn: true,
+          isScreenSharing,
+        });
       } catch (err: any) {
         console.error('Microphone access failed:', err);
         setDeviceError(
@@ -996,6 +1288,13 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
         screenVideoRef.current.srcObject = null;
       }
       setIsScreenSharing(false);
+      broadcastRoomMessage('track-state-changed', {
+        from: localPeerIdRef.current,
+        peerId: localPeerIdRef.current,
+        isCameraOn,
+        isMicOn,
+        isScreenSharing: false,
+      });
     } else {
       try {
         if (!navigator.mediaDevices?.getDisplayMedia) {
@@ -1022,9 +1321,23 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
               screenVideoRef.current.srcObject = null;
             }
             setIsScreenSharing(false);
+            broadcastRoomMessage('track-state-changed', {
+              from: localPeerIdRef.current,
+              peerId: localPeerIdRef.current,
+              isCameraOn,
+              isMicOn,
+              isScreenSharing: false,
+            });
           };
         }
         setIsScreenSharing(true);
+        broadcastRoomMessage('track-state-changed', {
+          from: localPeerIdRef.current,
+          peerId: localPeerIdRef.current,
+          isCameraOn,
+          isMicOn,
+          isScreenSharing: true,
+        });
       } catch (err: any) {
         if (err?.name !== 'NotAllowedError') {
           console.error('Screen sharing error:', err);
@@ -1052,14 +1365,9 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       audioContextRef.current.close().catch(() => {});
       audioContextRef.current = null;
     }
-    if (broadcastChannelRef.current) {
-      try {
-        broadcastChannelRef.current.postMessage({
-          type: 'peer-leave',
-          from: localPeerIdRef.current,
-        });
-      } catch {}
-    }
+    broadcastRoomMessage('peer-leave', {
+      from: localPeerIdRef.current,
+    });
     Object.values(peerConnectionsRef.current).forEach((pc) => {
       try {
         pc.close();
@@ -1077,26 +1385,26 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
 
   const handleDeleteLiveClass = async () => {
     if (confirm(`Are you sure you want to end and delete this live class session? This will close the broadcast and delete the session for all learners.`)) {
-      if (broadcastChannelRef.current) {
-        try {
-          broadcastChannelRef.current.postMessage({
-            type: 'peer-leave',
-            from: localPeerIdRef.current,
-          });
-        } catch {}
-      }
-      await deleteLiveSession(params.enrollmentId);
+      broadcastRoomMessage('session-ended', {
+        from: localPeerIdRef.current,
+        courseId: canonicalRoomId,
+      });
+      await deleteLiveSession(canonicalRoomId);
       handleLeaveRoom();
-      const updated = await fetchCourseModules(params.enrollmentId, courseTitle, course?.category);
+      const updated = await fetchCourseModules(canonicalRoomId, courseTitle, course?.category);
       setCourseModules(updated);
     }
   };
 
   const handleDeleteLiveModule = async (mod: CourseModuleItem) => {
     if (confirm(`Delete live class "${mod.title}" from this course?`)) {
-      await deleteLiveSession(params.enrollmentId);
+      broadcastRoomMessage('session-ended', {
+        from: localPeerIdRef.current,
+        courseId: canonicalRoomId,
+      });
+      await deleteLiveSession(canonicalRoomId);
       await deleteCourseModule(mod.id);
-      const updated = await fetchCourseModules(params.enrollmentId, courseTitle, course?.category);
+      const updated = await fetchCourseModules(canonicalRoomId, courseTitle, course?.category);
       setCourseModules(updated);
     }
   };
@@ -1808,8 +2116,21 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                                 autoPlay
                                 playsInline
                                 muted={Boolean(peer.isMutedLocally)}
-                                className="w-full h-full object-cover"
+                                className={peer.isCameraOn !== false ? 'w-full h-full object-cover' : 'hidden'}
                               />
+
+                              {/* Fallback Avatar when Camera is OFF */}
+                              {peer.isCameraOn === false && (
+                                <div className="flex flex-col items-center justify-center gap-2 text-zinc-500 py-6">
+                                  <div className="w-14 h-14 rounded-full bg-gradient-to-br from-zinc-800 to-zinc-950 border-2 border-zinc-700/80 flex items-center justify-center text-white font-bold text-lg shadow-xl">
+                                    {(peer.name || 'P').charAt(0).toUpperCase()}
+                                  </div>
+                                  <div className="text-center">
+                                    <div className="text-xs font-bold text-zinc-200">{peer.name}</div>
+                                    <span className="text-[10px] font-mono text-zinc-500">Camera is Off</span>
+                                  </div>
+                                </div>
+                              )}
 
                               {/* Peer Badge */}
                               <div className="absolute top-2.5 left-2.5 z-10 px-2.5 py-1 rounded-lg bg-black/80 border border-zinc-800 text-[10px] font-mono text-white flex items-center gap-1.5 backdrop-blur-md">
@@ -1839,13 +2160,23 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
                                   title={peer.isMutedLocally ? 'Unmute remote audio' : 'Mute remote audio locally'}
                                 >
                                   {peer.isMutedLocally ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3 text-emerald-400" />}
-                                  <span>{peer.isMutedLocally ? 'Audio Muted' : 'Audio ON'}</span>
+                                  <span>{peer.isMutedLocally ? 'Muted' : 'Sound ON'}</span>
                                 </button>
                               </div>
 
-                              <div className="absolute bottom-2.5 left-2.5 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono text-emerald-400 backdrop-blur-md">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                                <span>Live WebRTC Audio/Video</span>
+                              {/* Peer Mic Status */}
+                              <div className="absolute bottom-2.5 left-2.5 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-black/80 text-[10px] font-mono backdrop-blur-md">
+                                {peer.isMicOn !== false ? (
+                                  <span className="text-emerald-400 flex items-center gap-1">
+                                    <Mic className="w-3 h-3 text-emerald-400 animate-pulse" />
+                                    <span>Mic Active</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-zinc-500 flex items-center gap-1">
+                                    <MicOff className="w-3 h-3" />
+                                    <span>Mic Muted</span>
+                                  </span>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -2554,7 +2885,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       <InstructorStudioModal
         isOpen={isInstructorStudioOpen}
         onClose={() => setIsInstructorStudioOpen(false)}
-        courseId={course?.id || params.enrollmentId}
+        courseId={canonicalRoomId}
         courseTitle={courseTitle}
         onSuccess={loadCourseData}
       />
@@ -2563,7 +2894,7 @@ export default function CoursePlayerPage({ params }: { params: { enrollmentId: s
       <ScheduleLiveClassModal
         isOpen={isScheduleLiveOpen}
         onClose={() => setIsScheduleLiveOpen(false)}
-        defaultCourseId={course?.id || params.enrollmentId}
+        defaultCourseId={canonicalRoomId}
         defaultCourseTitle={courseTitle}
         onSuccess={loadCourseData}
       />
